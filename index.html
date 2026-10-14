@@ -243,6 +243,46 @@
             z-index: 400;
         }
 
+        /* Broadcast Telemetry & Reveal Animations */
+        @keyframes radarSweep {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes stampSlam {
+            0% { transform: scale(2.4) rotate(-12deg); opacity: 0; }
+            60% { transform: scale(0.92) rotate(-3deg); opacity: 1; }
+            80% { transform: scale(1.04) rotate(-5deg); }
+            100% { transform: scale(1) rotate(-4deg); opacity: 1; }
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(243, 178, 41, 0.6); }
+            50% { box-shadow: 0 0 0 14px rgba(243, 178, 41, 0); }
+        }
+        .jl-radar-sweep {
+            animation: radarSweep 2.2s linear infinite;
+        }
+        .jl-stamp-reveal {
+            animation: stampSlam 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+        .jl-pulse-glow {
+            animation: pulseGlow 1.6s infinite;
+        }
+
+        /* POI Reference Marker on Map */
+        .jl-poi-chip {
+            background: rgba(18, 26, 36, 0.92);
+            color: #F3B229;
+            border: 1.5px solid #F3B229;
+            border-radius: 999px;
+            padding: 1px 7px;
+            font-family: 'Barlow Condensed', sans-serif;
+            font-weight: 800;
+            font-size: 11px;
+            letter-spacing: 0.4px;
+            white-space: nowrap;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+        }
+
         /* Scrollbars */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -305,52 +345,249 @@
 
         const { useState, useEffect, useRef, useMemo } = React;
 
-        // Bounding Box covering Denmark / Greater Zealand (Zone 1-99) and surroundings for inverted red masks
-        const DENMARK_BBOX = [10.6, 54.4, 13.4, 56.4];
+        // ============================================================================
+        // JET LAG BROADCAST SOUND ENGINE (Web Audio API — Ingen eksterne lydfiler krævet)
+        // ============================================================================
+        const JetLagAudio = {
+            ctx: null,
+            muted: false,
+            init() {
+                if (!this.ctx && typeof window !== 'undefined') {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (AudioCtx) this.ctx = new AudioCtx();
+                }
+                if (this.ctx && this.ctx.state === 'suspended') {
+                    this.ctx.resume().catch(() => {});
+                }
+            },
+            playTone(freq, type = 'sine', duration = 0.18, delay = 0, vol = 0.16, slideTo = null) {
+                if (this.muted) return;
+                try {
+                    this.init();
+                    if (!this.ctx) return;
+                    const t0 = this.ctx.currentTime + delay;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = type;
+                    osc.frequency.setValueAtTime(freq, t0);
+                    if (slideTo) {
+                        osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + duration);
+                    }
+                    gain.gain.setValueAtTime(0.001, t0);
+                    gain.gain.linearRampToValueAtTime(vol, t0 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(t0);
+                    osc.stop(t0 + duration + 0.02);
+                } catch (e) {}
+            },
+            // Iconic Jet Lag Title / Broadcast Stinger
+            playIntroStinger() {
+                this.playTone(349.23, 'sawtooth', 0.18, 0.00, 0.10); // F4
+                this.playTone(440.00, 'sawtooth', 0.18, 0.10, 0.11); // A4
+                this.playTone(523.25, 'sawtooth', 0.22, 0.20, 0.12); // C5
+                this.playTone(698.46, 'triangle', 0.55, 0.32, 0.16); // F5
+            },
+            // Question Sent Whoosh + Telemetry Beep
+            playQuestionSent() {
+                this.playTone(240, 'sine', 0.22, 0, 0.14, 680);
+                this.playTone(880, 'triangle', 0.12, 0.22, 0.12);
+                this.playTone(1174.66, 'triangle', 0.18, 0.34, 0.14);
+            },
+            // Countdown Radar Tick (increases pitch near the end)
+            playCountdownTick(secondsLeft) {
+                const isUrgent = secondsLeft <= 3;
+                const freq = isUrgent ? 987.77 : 587.33;
+                this.playTone(freq, 'sine', 0.09, 0, isUrgent ? 0.15 : 0.08);
+                if (isUrgent) {
+                    this.playTone(freq * 1.5, 'triangle', 0.06, 0.04, 0.07);
+                }
+            },
+            // Dramatic Answer Reveal + Map Slice Stamp
+            playAnswerReveal(isPositive = true) {
+                if (isPositive) {
+                    // Positive Broadcast Brass Chord (C5 -> E5 -> G5 -> C6)
+                    this.playTone(523.25, 'triangle', 0.25, 0.00, 0.16);
+                    this.playTone(659.25, 'triangle', 0.25, 0.08, 0.16);
+                    this.playTone(783.99, 'triangle', 0.30, 0.16, 0.16);
+                    this.playTone(1046.50, 'sawtooth', 0.55, 0.24, 0.14);
+                } else {
+                    // Eliminated / Cut Chord
+                    this.playTone(392.00, 'sawtooth', 0.22, 0.00, 0.14);
+                    this.playTone(311.13, 'sawtooth', 0.45, 0.15, 0.16);
+                }
+                // Map Stamp Sub-Bass Thud
+                this.playTone(130, 'sine', 0.35, 0.28, 0.24, 42);
+            },
+            // Urgent Alert for Hiders when Seekers ask a question
+            playHiderAlert() {
+                this.playTone(783.99, 'square', 0.14, 0.00, 0.10);
+                this.playTone(1046.50, 'square', 0.14, 0.16, 0.12);
+                this.playTone(783.99, 'square', 0.14, 0.32, 0.10);
+                this.playTone(1046.50, 'square', 0.28, 0.48, 0.14);
+            }
+        };
 
-        // Built-in high-reliability Zone 1-99 datasets for Radar, Matching, Measuring & Tentacles
+        // Outer World Ring til fejfri huller/inversioner uden Turf-diagonaler
+        const WORLD_OUTER_RING = [
+            [6.0, 52.5],
+            [18.0, 52.5],
+            [18.0, 59.5],
+            [6.0, 59.5],
+            [6.0, 52.5]
+        ];
+        // Bounding Box der dækker Sjælland / Øresund til halvplans-klipning
+        const DENMARK_BBOX = [10.6, 54.4, 13.6, 56.45];
+
+        // Kilometer-projektion centreret ved København/Sjælland (55.70° N, 12.35° Ø)
+        // Sikrer at vinkelrette halveringslinjer (Termometer & Voronoi/Lufthavne) er 100% nøjagtige i virkelige km!
+        const REF_LAT = 55.70;
+        const REF_LNG = 12.35;
+        const KM_PER_LAT = 111.32;
+        const KM_PER_LNG = 111.32 * Math.cos((REF_LAT * Math.PI) / 180);
+
+        const toKmXY = (lng, lat) => [
+            (lng - REF_LNG) * KM_PER_LNG,
+            (lat - REF_LAT) * KM_PER_LAT
+        ];
+        const toLngLat = (x, y) => [
+            REF_LNG + x / KM_PER_LNG,
+            REF_LAT + y / KM_PER_LAT
+        ];
+
+        // Sutherland-Hodgman eksakt lineær halvplans-klipper i km-koordinater
+        // Beholder alle punkter (x,y) hvor (x - mx)*nx + (y - my)*ny >= 0
+        const clipPolygonHalfPlaneKm = (polyKm, mx, my, nx, ny) => {
+            if (!polyKm || polyKm.length === 0) return [];
+            const out = [];
+            const isInside = (pt) => (pt[0] - mx) * nx + (pt[1] - my) * ny >= -1e-9;
+            const intersect = (p1, p2) => {
+                const v1 = (p1[0] - mx) * nx + (p1[1] - my) * ny;
+                const v2 = (p2[0] - mx) * nx + (p2[1] - my) * ny;
+                const denom = v1 - v2;
+                if (Math.abs(denom) < 1e-12) return p1;
+                const t = v1 / denom;
+                return [p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1])];
+            };
+
+            for (let i = 0; i < polyKm.length; i++) {
+                const cur = polyKm[i];
+                const prev = polyKm[(i + polyKm.length - 1) % polyKm.length];
+                const curIn = isInside(cur);
+                const prevIn = isInside(prev);
+                if (curIn) {
+                    if (!prevIn) out.push(intersect(prev, cur));
+                    out.push(cur);
+                } else if (prevIn) {
+                    out.push(intersect(prev, cur));
+                }
+            }
+            return out;
+        };
+
+        // Udregner eksakt Voronoi-celle for punkt #targetIdx blandt points (fungerer perfekt selv med 2 eller 3 lufthavne!)
+        const computeExactVoronoiRingLngLat = (points, targetIdx) => {
+            const [minLng, minLat, maxLng, maxLat] = DENMARK_BBOX;
+            let polyKm = [
+                toKmXY(minLng, minLat),
+                toKmXY(maxLng, minLat),
+                toKmXY(maxLng, maxLat),
+                toKmXY(minLng, maxLat)
+            ];
+            const target = points[targetIdx];
+            if (!target) return null;
+            const [tx, ty] = toKmXY(target.lng, target.lat);
+
+            for (let j = 0; j < points.length; j++) {
+                if (j === targetIdx) continue;
+                const [ox, oy] = toKmXY(points[j].lng, points[j].lat);
+                const dx = tx - ox;
+                const dy = ty - oy;
+                if (Math.hypot(dx, dy) < 1e-5) continue;
+                const mx = (tx + ox) / 2;
+                const my = (ty + oy) / 2;
+                polyKm = clipPolygonHalfPlaneKm(polyKm, mx, my, dx, dy);
+                if (polyKm.length < 3) return null;
+            }
+
+            const ring = polyKm.map(([x, y]) => toLngLat(x, y));
+            ring.push(ring[0]);
+            return ring;
+        };
+
+        // Udregner eksakt Termometer-halvplan i km-koordinater (100% vinkelret på A->B linjen!)
+        const computeExactThermometerRingLngLat = (pointA, pointB, warmer) => {
+            const [minLng, minLat, maxLng, maxLat] = DENMARK_BBOX;
+            let polyKm = [
+                toKmXY(minLng, minLat),
+                toKmXY(maxLng, minLat),
+                toKmXY(maxLng, maxLat),
+                toKmXY(minLng, maxLat)
+            ];
+            const [ax, ay] = toKmXY(pointA.lng, pointA.lat);
+            const [bx, by] = toKmXY(pointB.lng, pointB.lat);
+            const mx = (ax + bx) / 2;
+            const my = (ay + by) / 2;
+            // Hvis Varmere ved B: udeluk siden tættest på A (vektor mod A = ax - bx).
+            // Hvis Koldere ved B: udeluk siden tættest på B (vektor mod B = bx - ax).
+            const nx = warmer ? (ax - bx) : (bx - ax);
+            const ny = warmer ? (ay - by) : (by - ay);
+            polyKm = clipPolygonHalfPlaneKm(polyKm, mx, my, nx, ny);
+            if (polyKm.length < 3) return null;
+            const ring = polyKm.map(([x, y]) => toLngLat(x, y));
+            ring.push(ring[0]);
+            return ring;
+        };
+
+        // Komplett datasæt for Zone 1–99 (København & Sjælland) til de 80 officielle Jet Lag spørgsmål
         const BUILTIN_GEO_DATA = {
             lufthavn: [
                 { name: "Københavns Lufthavn (CPH Kastrup)", lat: 55.6180, lng: 12.6508 },
                 { name: "Roskilde Lufthavn (RKE)", lat: 55.5856, lng: 12.1314 },
-                { name: "Grønholt Flyveplads", lat: 55.9414, lng: 12.3822 }
+                { name: "Malmö Airport (MMX)", lat: 55.5363, lng: 13.3762 },
+                { name: "Ängelholm-Helsingborg Airport (AGH)", lat: 56.2961, lng: 12.8471 }
             ],
             station: [
-                { name: "København H", lat: 55.6726, lng: 12.5649 },
-                { name: "Nørreport St.", lat: 55.6831, lng: 12.5716 },
-                { name: "Østerport St.", lat: 55.6926, lng: 12.5872 },
-                { name: "Frederiksberg St.", lat: 55.6812, lng: 12.5342 },
-                { name: "Flintholm St.", lat: 55.6859, lng: 12.4994 },
-                { name: "Valby St.", lat: 55.6637, lng: 12.5141 },
-                { name: "KBH Syd (Ny Ellebjerg)", lat: 55.6522, lng: 12.5153 },
-                { name: "Ørestad St.", lat: 55.6290, lng: 12.5790 },
-                { name: "Hellerup St.", lat: 55.7308, lng: 12.5673 },
-                { name: "Lyngby St.", lat: 55.7681, lng: 12.5029 },
-                { name: "Holte St.", lat: 55.8169, lng: 12.4689 },
-                { name: "Hillerød St.", lat: 55.9279, lng: 12.3106 },
-                { name: "Birkerød St.", lat: 55.8406, lng: 12.4239 },
-                { name: "Farum St.", lat: 55.8117, lng: 12.3611 },
-                { name: "Buddinge St.", lat: 55.7471, lng: 12.4932 },
-                { name: "Herlev St.", lat: 55.7190, lng: 12.4419 },
-                { name: "Ballerup St.", lat: 55.7309, lng: 12.3586 },
-                { name: "Måløv St.", lat: 55.7476, lng: 12.3183 },
-                { name: "Frederikssund St.", lat: 55.8358, lng: 12.0652 },
-                { name: "Rødovre St.", lat: 55.6644, lng: 12.4581 },
-                { name: "Glostrup St.", lat: 55.6632, lng: 12.3982 },
-                { name: "Albertslund St.", lat: 55.6581, lng: 12.3538 },
-                { name: "Høje Taastrup St.", lat: 55.6487, lng: 12.2695 },
-                { name: "Roskilde St.", lat: 55.6391, lng: 12.0890 },
-                { name: "Brøndby Strand St.", lat: 55.6209, lng: 12.4226 },
-                { name: "Hundige St.", lat: 55.5988, lng: 12.3338 },
-                { name: "Solrød Strand St.", lat: 55.5333, lng: 12.2189 },
-                { name: "Køge St.", lat: 55.4582, lng: 12.1868 },
-                { name: "Køge Nord St.", lat: 55.4970, lng: 12.1770 },
-                { name: "Klampenborg St.", lat: 55.7770, lng: 12.5878 },
-                { name: "Rungsted Kyst St.", lat: 55.8842, lng: 12.5333 },
-                { name: "Humlebæk St.", lat: 55.9628, lng: 12.5311 },
-                { name: "Helsingør St.", lat: 56.0335, lng: 12.6143 },
-                { name: "Ringsted St.", lat: 55.4375, lng: 11.7873 },
-                { name: "Holbæk St.", lat: 55.7156, lng: 11.7097 }
+                { name: "København H", line: "S-tog / Regional", lat: 55.6726, lng: 12.5649 },
+                { name: "Nørreport", line: "S-tog / Metro", lat: 55.6831, lng: 12.5716 },
+                { name: "Østerport", line: "S-tog / Metro", lat: 55.6926, lng: 12.5872 },
+                { name: "Frederiksberg", line: "M1 / M2 / M3", lat: 55.6812, lng: 12.5342 },
+                { name: "Flintholm", line: "Linje C / F / M1 / M2", lat: 55.6859, lng: 12.4994 },
+                { name: "Valby", line: "Linje B / C / H", lat: 55.6637, lng: 12.5141 },
+                { name: "København Syd", line: "Linje A / E / F / M4", lat: 55.6522, lng: 12.5153 },
+                { name: "Ørestad", line: "M1 / Regional", lat: 55.6290, lng: 12.5790 },
+                { name: "Hellerup", line: "Linje A / C / E / F", lat: 55.7308, lng: 12.5673 },
+                { name: "Lyngby", line: "Linje A / E", lat: 55.7681, lng: 12.5029 },
+                { name: "Holte", line: "Linje A / E", lat: 55.8169, lng: 12.4689 },
+                { name: "Hillerød", line: "Linje A / Lokalbane", lat: 55.9279, lng: 12.3106 },
+                { name: "Birkerød", line: "Linje A", lat: 55.8406, lng: 12.4239 },
+                { name: "Farum", line: "Linje B", lat: 55.8117, lng: 12.3611 },
+                { name: "Buddinge", line: "Linje B", lat: 55.7471, lng: 12.4932 },
+                { name: "Herlev", line: "Linje C / H", lat: 55.7190, lng: 12.4419 },
+                { name: "Ballerup", line: "Linje C / H", lat: 55.7309, lng: 12.3586 },
+                { name: "Måløv", line: "Linje C / H", lat: 55.7476, lng: 12.3183 },
+                { name: "Frederikssund", line: "Linje C", lat: 55.8358, lng: 12.0652 },
+                { name: "Rødovre", line: "Linje B", lat: 55.6644, lng: 12.4581 },
+                { name: "Hvidovre", line: "Linje B", lat: 55.6433, lng: 12.4767 },
+                { name: "Glostrup", line: "Linje B", lat: 55.6632, lng: 12.3982 },
+                { name: "Albertslund", line: "Linje B", lat: 55.6581, lng: 12.3538 },
+                { name: "Høje Taastrup", line: "Linje B / Regional", lat: 55.6487, lng: 12.2695 },
+                { name: "Roskilde", line: "Regional / IC", lat: 55.6391, lng: 12.0890 },
+                { name: "Brøndby Strand", line: "Linje A", lat: 55.6209, lng: 12.4226 },
+                { name: "Vallensbæk", line: "Linje A", lat: 55.6235, lng: 12.3881 },
+                { name: "Ishøj", line: "Linje A", lat: 55.6134, lng: 12.3568 },
+                { name: "Hundige", line: "Linje A / E", lat: 55.5988, lng: 12.3338 },
+                { name: "Greve", line: "Linje A / E", lat: 55.5815, lng: 12.2954 },
+                { name: "Solrød Strand", line: "Linje A / E", lat: 55.5333, lng: 12.2189 },
+                { name: "Køge", line: "Linje E / Regional", lat: 55.4582, lng: 12.1868 },
+                { name: "Køge Nord", line: "Linje E / IC", lat: 55.4970, lng: 12.1770 },
+                { name: "Klampenborg", line: "Linje C / Kystbanen", lat: 55.7770, lng: 12.5878 },
+                { name: "Rungsted Kyst", line: "Kystbanen", lat: 55.8842, lng: 12.5333 },
+                { name: "Humlebæk", line: "Kystbanen", lat: 55.9628, lng: 12.5311 },
+                { name: "Helsingør", line: "Kystbanen / Lokalbane", lat: 56.0335, lng: 12.6143 },
+                { name: "Ringsted", line: "Regional / IC", lat: 55.4375, lng: 11.7873 },
+                { name: "Holbæk", line: "Regional", lat: 55.7156, lng: 11.7097 }
             ],
             metro: [
                 { name: "Kgs. Nytorv Metro", lat: 55.6794, lng: 12.5859 },
@@ -381,26 +618,143 @@
                 { name: "Orientkaj Metro", lat: 55.7128, lng: 12.5967 },
                 { name: "Mozarts Plads Metro", lat: 55.6458, lng: 12.5269 }
             ],
+            high_speed_line: [
+                { name: "København H (Højhastighedsspor)", lat: 55.6726, lng: 12.5649 },
+                { name: "København Syd (Højhastighedsspor)", lat: 55.6522, lng: 12.5153 },
+                { name: "Hvidovre Fjernbane", lat: 55.6305, lng: 12.4410 },
+                { name: "Vallensbæk Højhastighedsbane", lat: 55.6050, lng: 12.3500 },
+                { name: "Køge Nord (Højhastighedsspor)", lat: 55.4970, lng: 12.1770 },
+                { name: "Ringsted (Højhastighedsspor)", lat: 55.4375, lng: 11.7873 }
+            ],
+            admin_1: [
+                { name: "Region Hovedstaden", lat: 55.7600, lng: 12.4500 },
+                { name: "Region Sjælland", lat: 55.5200, lng: 11.9200 }
+            ],
+            admin_2: [
+                { name: "Landsdel: Byen København (KBH, FRB, Tårnby, Dragør)", lat: 55.6650, lng: 12.5750 },
+                { name: "Landsdel: Københavns Omegn (Vestegnen & Nord)", lat: 55.7050, lng: 12.4100 },
+                { name: "Landsdel: Nordsjælland", lat: 55.9200, lng: 12.3200 },
+                { name: "Landsdel: Østsjælland (Roskilde, Køge, Greve, Solrød)", lat: 55.5650, lng: 12.1400 },
+                { name: "Landsdel: Vest- og Sydsjælland (Ringsted, Holbæk m.fl.)", lat: 55.5700, lng: 11.7500 }
+            ],
             kommune: [
-                { name: "København Indre By", lat: 55.6786, lng: 12.5764 },
-                { name: "Frederiksberg", lat: 55.6794, lng: 12.5347 },
-                { name: "Østerbro / Nordhavn", lat: 55.7072, lng: 12.5792 },
-                { name: "Nørrebro / Nordvest", lat: 55.6997, lng: 12.5419 },
-                { name: "Vesterbro / Valby", lat: 55.6639, lng: 12.5222 },
-                { name: "Amager / Kastrup", lat: 55.6361, lng: 12.6089 },
-                { name: "Rødovre / Hvidovre", lat: 55.6572, lng: 12.4636 },
-                { name: "Glostrup / Brøndby / Albertslund", lat: 55.6589, lng: 12.3881 },
-                { name: "Høje-Taastrup / Ishøj", lat: 55.6381, lng: 12.2892 },
-                { name: "Gentofte / Hellerup", lat: 55.7486, lng: 12.5569 },
-                { name: "Lyngby / Virum / Søllerød", lat: 55.7861, lng: 12.4950 },
-                { name: "Gladsaxe / Herlev / Ballerup", lat: 55.7350, lng: 12.4261 },
-                { name: "Furesø (Farum / Værløse)", lat: 55.8011, lng: 12.3728 },
-                { name: "Rudersdal (Holte / Birkerød)", lat: 55.8350, lng: 12.4411 },
-                { name: "Hillerød", lat: 55.9279, lng: 12.3106 },
-                { name: "Helsingør / Fredensborg", lat: 56.0120, lng: 12.5550 },
-                { name: "Frederikssund / Egedal", lat: 55.8050, lng: 12.1450 },
-                { name: "Roskilde / Lejre", lat: 55.6391, lng: 12.0890 },
-                { name: "Greve / Solrød / Køge", lat: 55.5250, lng: 12.2350 }
+                { name: "Københavns Kommune", lat: 55.6786, lng: 12.5764 },
+                { name: "Frederiksberg Kommune", lat: 55.6794, lng: 12.5347 },
+                { name: "Tårnby Kommune", lat: 55.6295, lng: 12.6042 },
+                { name: "Dragør Kommune", lat: 55.5942, lng: 12.6703 },
+                { name: "Rødovre Kommune", lat: 55.6805, lng: 12.4539 },
+                { name: "Hvidovre Kommune", lat: 55.6419, lng: 12.4764 },
+                { name: "Glostrup Kommune", lat: 55.6667, lng: 12.3989 },
+                { name: "Brøndby Kommune", lat: 55.6475, lng: 12.4150 },
+                { name: "Albertslund Kommune", lat: 55.6660, lng: 12.3538 },
+                { name: "Vallensbæk Kommune", lat: 55.6310, lng: 12.3780 },
+                { name: "Ishøj Kommune", lat: 55.6155, lng: 12.3512 },
+                { name: "Høje-Taastrup Kommune", lat: 55.6500, lng: 12.2720 },
+                { name: "Gentofte Kommune", lat: 55.7486, lng: 12.5569 },
+                { name: "Lyngby-Taarbæk Kommune", lat: 55.7720, lng: 12.5020 },
+                { name: "Gladsaxe Kommune", lat: 55.7360, lng: 12.4780 },
+                { name: "Herlev Kommune", lat: 55.7240, lng: 12.4380 },
+                { name: "Ballerup Kommune", lat: 55.7310, lng: 12.3610 },
+                { name: "Furesø Kommune (Værløse/Farum)", lat: 55.8011, lng: 12.3728 },
+                { name: "Rudersdal Kommune (Holte/Birkerød)", lat: 55.8350, lng: 12.4411 },
+                { name: "Hørsholm Kommune", lat: 55.8810, lng: 12.5020 },
+                { name: "Allerød Kommune", lat: 55.8710, lng: 12.3560 },
+                { name: "Hillerød Kommune", lat: 55.9279, lng: 12.3106 },
+                { name: "Fredensborg Kommune", lat: 55.9730, lng: 12.4040 },
+                { name: "Helsingør Kommune", lat: 56.0335, lng: 12.6143 },
+                { name: "Frederikssund Kommune", lat: 55.8358, lng: 12.0652 },
+                { name: "Egedal Kommune (Ølstykke/Stenløse)", lat: 55.7750, lng: 12.1890 },
+                { name: "Roskilde Kommune", lat: 55.6391, lng: 12.0890 },
+                { name: "Greve Kommune", lat: 55.5860, lng: 12.2960 },
+                { name: "Solrød Kommune", lat: 55.5333, lng: 12.2189 },
+                { name: "Køge Kommune", lat: 55.4582, lng: 12.1868 }
+            ],
+            bydel: [
+                { name: "Indre By", lat: 55.6805, lng: 12.5785 },
+                { name: "Østerbro", lat: 55.7072, lng: 12.5792 },
+                { name: "Nørrebro", lat: 55.6950, lng: 12.5480 },
+                { name: "Vesterbro / Kgs. Enghave", lat: 55.6615, lng: 12.5410 },
+                { name: "Valby", lat: 55.6610, lng: 12.5080 },
+                { name: "Vanløse", lat: 55.6878, lng: 12.4870 },
+                { name: "Brønshøj-Husum", lat: 55.7065, lng: 12.4880 },
+                { name: "Bispebjerg / Nordvest", lat: 55.7145, lng: 12.5290 },
+                { name: "Amager Øst", lat: 55.6575, lng: 12.6185 },
+                { name: "Amager Vest", lat: 55.6435, lng: 12.5785 },
+                { name: "Frederiksberg", lat: 55.6794, lng: 12.5347 }
+            ],
+            mountain: [
+                { name: "Gyldenløves Høj (126 m)", lat: 55.5458, lng: 11.8564 },
+                { name: "Maglehøj i Frederiksværk (91 m)", lat: 55.9781, lng: 12.0542 },
+                { name: "Søllerød Kirkeskov / Geels Bakke (86 m)", lat: 55.8122, lng: 12.4889 },
+                { name: "Herstedhøje i Albertslund (67 m)", lat: 55.6844, lng: 12.3653 },
+                { name: "Bellahøj (37 m)", lat: 55.7025, lng: 12.5131 },
+                { name: "Valby Bakke / Frederiksberg Bakke (31 m)", lat: 55.6717, lng: 12.5256 },
+                { name: "Amager Bakke / CopenHill (85 m)", lat: 55.6844, lng: 12.6203 }
+            ],
+            park: [
+                { name: "Fælledparken", lat: 55.7011, lng: 12.5686 },
+                { name: "Frederiksberg Have", lat: 55.6744, lng: 12.5258 },
+                { name: "Kongens Have", lat: 55.6850, lng: 12.5792 },
+                { name: "Ørstedsparken", lat: 55.6811, lng: 12.5664 },
+                { name: "Botanisk Have", lat: 55.6869, lng: 12.5739 },
+                { name: "Amager Strandpark", lat: 55.6547, lng: 12.6461 },
+                { name: "Jægersborg Dyrehave", lat: 55.7928, lng: 12.5714 },
+                { name: "Bernstorffsparken", lat: 55.7586, lng: 12.5514 },
+                { name: "Utterslev Mose", lat: 55.7186, lng: 12.5025 },
+                { name: "Valbyparken", lat: 55.6397, lng: 12.5194 },
+                { name: "Damhusengen / Damhussøen", lat: 55.6778, lng: 12.4733 },
+                { name: "Slotsparken i Hillerød", lat: 55.9369, lng: 12.3014 },
+                { name: "Byparken i Roskilde", lat: 55.6439, lng: 12.0758 }
+            ],
+            amusement_park: [
+                { name: "Tivoli (København)", lat: 55.6737, lng: 12.5681 },
+                { name: "Dyrehavsbakken (Bakken)", lat: 55.7756, lng: 12.5750 },
+                { name: "BonBon-Land", lat: 55.2614, lng: 11.8642 }
+            ],
+            zoo: [
+                { name: "København Zoo (Frederiksberg)", lat: 55.6725, lng: 12.5214 },
+                { name: "Nordsjællands Fuglepark", lat: 56.0467, lng: 12.2889 }
+            ],
+            aquarium: [
+                { name: "Den Blå Planet (Kastrup)", lat: 55.6381, lng: 12.6561 },
+                { name: "Øresundsakvariet (Helsingør)", lat: 56.0389, lng: 12.6156 }
+            ],
+            golf_course: [
+                { name: "Royal Golf Club (Ørestad/Amager)", lat: 55.6361, lng: 12.5694 },
+                { name: "Københavns Golf Klub (Dyrehaven)", lat: 55.7889, lng: 12.5639 },
+                { name: "Brøndby Golfklub", lat: 55.6425, lng: 12.4047 },
+                { name: "Smørum Golfcenter", lat: 55.7369, lng: 12.2986 },
+                { name: "Rungsted Golf Klub", lat: 55.8819, lng: 12.5247 },
+                { name: "Roskilde Golf Klub", lat: 55.6228, lng: 12.0556 },
+                { name: "Hillerød Golf Klub", lat: 55.9153, lng: 12.2681 },
+                { name: "Køge Golf Klub", lat: 55.4375, lng: 12.1922 }
+            ],
+            museum: [
+                { name: "Nationalmuseet", lat: 55.6747, lng: 12.5747 },
+                { name: "Statens Museum for Kunst (SMK)", lat: 55.6886, lng: 12.5783 },
+                { name: "Ny Carlsberg Glyptotek", lat: 55.6725, lng: 12.5722 },
+                { name: "Experimentarium (Hellerup)", lat: 55.7275, lng: 12.5769 },
+                { name: "Arken Museum for Moderne Kunst (Ishøj)", lat: 55.6061, lng: 12.3875 },
+                { name: "Louisiana Museum of Modern Art (Humlebæk)", lat: 55.9694, lng: 12.5425 },
+                { name: "Frilandsmuseet (Lyngby)", lat: 55.7867, lng: 12.4925 },
+                { name: "Vikingeskibsmuseet (Roskilde)", lat: 55.6508, lng: 12.0806 },
+                { name: "Frederiksborg Slot / Nationalhistorisk Museum (Hillerød)", lat: 55.9350, lng: 12.3011 },
+                { name: "Kronborg Slot (Helsingør)", lat: 56.0392, lng: 12.6217 },
+                { name: "Heerup Museum (Rødovre)", lat: 55.6808, lng: 12.4561 }
+            ],
+            movie_theater: [
+                { name: "Imperial Bio (Vesterport)", lat: 55.6756, lng: 12.5614 },
+                { name: "Palads Teatret (Axeltorv)", lat: 55.6761, lng: 12.5647 },
+                { name: "Vue Fisketorvet Bio", lat: 55.6625, lng: 12.5619 },
+                { name: "Nordisk Film Biografer Field's", lat: 55.6308, lng: 12.5775 },
+                { name: "Falkoner Biograf (Frederiksberg)", lat: 55.6803, lng: 12.5333 },
+                { name: "Empire Bio (Nørrebro)", lat: 55.6914, lng: 12.5561 },
+                { name: "Atlas Biograferne (Rødovre Centrum)", lat: 55.6775, lng: 12.4553 },
+                { name: "Kinopalæet (Lyngby)", lat: 55.7697, lng: 12.5036 },
+                { name: "BIG Bio Herlev", lat: 55.7200, lng: 12.4403 },
+                { name: "Nordisk Film Biografer Waves (Hundige)", lat: 55.6003, lng: 12.3311 },
+                { name: "Kino Ro's Torv (Roskilde)", lat: 55.6408, lng: 12.0997 },
+                { name: "Nordisk Film Biografer Hillerød", lat: 55.9289, lng: 12.3008 }
             ],
             hospital: [
                 { name: "Rigshospitalet (Blegdamsvej)", lat: 55.6961, lng: 12.5667 },
@@ -414,31 +768,186 @@
                 { name: "Sjællands Universitetshospital (Roskilde)", lat: 55.6331, lng: 12.0967 },
                 { name: "Sjællands Universitetshospital (Køge)", lat: 55.4856, lng: 12.1708 }
             ],
-            vand: [
-                { lat: 56.035, lng: 12.618 }, { lat: 56.082, lng: 12.468 }, { lat: 56.124, lng: 12.307 },
-                { lat: 56.058, lng: 12.126 }, { lat: 55.967, lng: 11.849 }, { lat: 55.950, lng: 12.540 },
-                { lat: 55.884, lng: 12.544 }, { lat: 55.818, lng: 12.575 }, { lat: 55.776, lng: 12.593 },
-                { lat: 55.728, lng: 12.582 }, { lat: 55.695, lng: 12.602 }, { lat: 55.665, lng: 12.635 },
-                { lat: 55.630, lng: 12.662 }, { lat: 55.595, lng: 12.675 }, { lat: 55.565, lng: 12.590 },
-                { lat: 55.588, lng: 12.532 }, { lat: 55.615, lng: 12.455 }, { lat: 55.605, lng: 12.375 },
-                { lat: 55.575, lng: 12.295 }, { lat: 55.525, lng: 12.225 }, { lat: 55.458, lng: 12.195 },
-                { lat: 55.398, lng: 12.255 }, { lat: 55.342, lng: 12.442 }, { lat: 55.652, lng: 12.080 },
-                { lat: 55.720, lng: 12.075 }, { lat: 55.805, lng: 12.045 }, { lat: 55.890, lng: 12.035 },
-                { lat: 55.725, lng: 11.795 }, { lat: 55.795, lng: 11.805 }, { lat: 55.975, lng: 12.115 },
-                { lat: 55.995, lng: 12.375 }, { lat: 55.798, lng: 12.412 }, { lat: 55.770, lng: 12.456 }
+            library: [
+                { name: "Københavns Hovedbibliotek (Krystalgade)", lat: 55.6808, lng: 12.5733 },
+                { name: "Den Sorte Diamant (Det Kgl. Bibliotek)", lat: 55.6736, lng: 12.5825 },
+                { name: "Frederiksberg Hovedbibliotek", lat: 55.6797, lng: 12.5319 },
+                { name: "Rødovre Hovedbibliotek", lat: 55.6794, lng: 12.4558 },
+                { name: "Hvidovre Hovedbibliotek", lat: 55.6422, lng: 12.4758 },
+                { name: "Gentofte Hovedbibliotek", lat: 55.7478, lng: 12.5711 },
+                { name: "Stadsbiblioteket i Lyngby", lat: 55.7717, lng: 12.5028 },
+                { name: "Gladsaxe Hovedbibliotek", lat: 55.7453, lng: 12.4939 },
+                { name: "Roskilde Bibliotek", lat: 55.6414, lng: 12.0856 },
+                { name: "Hillerød Bibliotek", lat: 55.9297, lng: 12.3119 },
+                { name: "Kulturværftet Bibliotek (Helsingør)", lat: 56.0369, lng: 12.6139 },
+                { name: "Køge Bibliotek", lat: 55.4567, lng: 12.1808 }
+            ],
+            consulate: [
+                { name: "USA's Ambassade (Dag Hammarskjölds Allé)", lat: 55.6967, lng: 12.5839 },
+                { name: "Tysklands Ambassade (Stockholmsgade)", lat: 55.6914, lng: 12.5819 },
+                { name: "Frankrigs Ambassade (Kongens Nytorv)", lat: 55.6797, lng: 12.5869 },
+                { name: "Sveriges Ambassade (Sankt Annæ Plads)", lat: 55.6817, lng: 12.5928 },
+                { name: "Storbritanniens Ambassade (Kastelsvej)", lat: 55.6969, lng: 12.5889 },
+                { name: "Japans Ambassade (Havneholmen)", lat: 55.6625, lng: 12.5656 }
+            ],
+            coastline: [
+                { name: "Helsingør Kyst", lat: 56.035, lng: 12.618 },
+                { name: "Hornbæk Kyst", lat: 56.092, lng: 12.458 },
+                { name: "Gilleleje Kyst", lat: 56.128, lng: 12.307 },
+                { name: "Tisvildeleje Kyst", lat: 56.062, lng: 12.078 },
+                { name: "Humlebæk Kyst", lat: 55.965, lng: 12.542 },
+                { name: "Rungsted Kyst", lat: 55.884, lng: 12.548 },
+                { name: "Vedbæk Kyst", lat: 55.852, lng: 12.572 },
+                { name: "Bellevue / Klampenborg Kyst", lat: 55.778, lng: 12.593 },
+                { name: "Hellerup Strand", lat: 55.732, lng: 12.582 },
+                { name: "Nordhavn / Langelinie Kyst", lat: 55.702, lng: 12.602 },
+                { name: "Amager Strand", lat: 55.656, lng: 12.648 },
+                { name: "Kastrup / Dragør Kyst", lat: 55.595, lng: 12.675 },
+                { name: "Kalvebod Fælled Kyst", lat: 55.588, lng: 12.532 },
+                { name: "Hvidovre / Kalveboderne Kyst", lat: 55.618, lng: 12.478 },
+                { name: "Brøndby Strand Kyst", lat: 55.612, lng: 12.425 },
+                { name: "Ishøj / Hundige Strand", lat: 55.595, lng: 12.355 },
+                { name: "Greve / Mosede Strand", lat: 55.565, lng: 12.275 },
+                { name: "Solrød Strand Kyst", lat: 55.525, lng: 12.225 },
+                { name: "Køge Bugt / Køge Kyst", lat: 55.458, lng: 12.195 },
+                { name: "Roskilde Fjord (Roskilde Havn)", lat: 55.652, lng: 12.080 },
+                { name: "Roskilde Fjord (Jyllinge)", lat: 55.755, lng: 12.100 },
+                { name: "Roskilde Fjord (Frederikssund)", lat: 55.835, lng: 12.055 }
+            ],
+            body_of_water: [
+                { name: "Søerne i København (Peblinge Sø)", lat: 55.685, lng: 12.560 },
+                { name: "Damhussøen (Rødovre/Vanløse)", lat: 55.678, lng: 12.479 },
+                { name: "Utterslev Mose", lat: 55.718, lng: 12.502 },
+                { name: "Gentofte Sø", lat: 55.748, lng: 12.538 },
+                { name: "Lyngby Sø", lat: 55.774, lng: 12.488 },
+                { name: "Bagsværd Sø", lat: 55.772, lng: 12.456 },
+                { name: "Furesøen", lat: 55.798, lng: 12.412 },
+                { name: "Sjælsø", lat: 55.862, lng: 12.448 },
+                { name: "Esrum Sø", lat: 55.995, lng: 12.375 },
+                { name: "Arresø", lat: 55.975, lng: 12.115 },
+                { name: "Københavns Havneløb", lat: 55.672, lng: 12.582 },
+                { name: "Amager Strand / Øresund", lat: 55.656, lng: 12.648 },
+                { name: "Kalveboderne (Hvidovre)", lat: 55.618, lng: 12.478 },
+                { name: "Vallensbæk Sø", lat: 55.619, lng: 12.382 },
+                { name: "Køge Bugt", lat: 55.580, lng: 12.310 },
+                { name: "Roskilde Fjord", lat: 55.652, lng: 12.080 }
+            ],
+            international_border: [
+                { name: "Øresundsgrænsen (Helsingør–Helsingborg)", lat: 56.038, lng: 12.652 },
+                { name: "Øresundsgrænsen (Ven Nord)", lat: 55.930, lng: 12.660 },
+                { name: "Øresundsgrænsen (Midt Øresund)", lat: 55.800, lng: 12.740 },
+                { name: "Øresundsgrænsen (Peberholm / Øresundsbroen)", lat: 55.595, lng: 12.785 },
+                { name: "Øresundsgrænsen (Drogden Syd)", lat: 55.480, lng: 12.720 }
+            ],
+            admin_border_1: [
+                { name: "Regionsgrænse (Roskilde/Egedal)", lat: 55.715, lng: 12.165 },
+                { name: "Regionsgrænse (Høje-Taastrup/Roskilde)", lat: 55.645, lng: 12.195 },
+                { name: "Regionsgrænse (Ishøj/Greve)", lat: 55.602, lng: 12.322 }
             ]
         };
 
-        const MANUAL_PHOTO_QUESTIONS = [
-            { id: 'photo_tallest', type: 'photo', title: '📸 Billede: Højeste bygning', text: 'Send et billede af den højeste bygning I kan se fra jeres nuværende position!' },
-            { id: 'photo_station', type: 'photo', title: '📸 Billede: Togperronen', text: 'Send et billede lige ud fra togperronen / stationen (uden stationsnavn)!' },
-            { id: 'photo_street', type: 'photo', title: '📸 Billede: Bredeste gade', text: 'Send et billede ned ad den bredeste gade / vej inden for 200 meter!' },
-            { id: 'photo_tree', type: 'photo', title: '📸 Billede: Et træ / natur', text: 'Send et billede af et helt træ eller parkområde tæt på jer!' },
-            { id: 'photo_sky', type: 'photo', title: '📸 Billede: Himlen lige op', text: 'Peg kameraet 90 grader lige op mod himlen og tag et billede!' },
-            { id: 'photo_shop', type: 'photo', title: '📸 Billede: Butik / Supermarked', text: 'Send et billede af nærmeste supermarked eller butiksfacade!' },
-            { id: 'text_letter', type: 'text', title: '🔤 Bogstav: Gadenavn', text: 'Hvad er det FØRSTE bogstav i den vej eller gade, I befinder jer på lige nu?' },
-            { id: 'text_zone', type: 'text', title: '🎫 Takstzone: Ulige eller Lige?', text: 'Er jeres nuværende DOT takstzone (Zone 1-99) et LIGE eller ULIGE tal?' },
-            { id: 'text_floor', type: 'text', title: '🏢 Etager på bygning', text: 'Hvor mange etager har bygningen lige overfor jer?' }
+        // ============================================================================
+        // DE OFFICIELLE SPØRGSMÅL FRA JET LAG: THE GAME — HIDE AND SEEK REGELBOGEN
+        // ============================================================================
+        const OFFICIAL_RADAR_DISTANCES = [
+            { label: "1/4 Mile (400 m)", km: 0.402 },
+            { label: "1/2 Mile (800 m)", km: 0.805 },
+            { label: "1 Mile (1,6 km)", km: 1.609 },
+            { label: "3 Miles (4,8 km)", km: 4.828 },
+            { label: "5 Miles (8,0 km)", km: 8.047 },
+            { label: "10 Miles (16,1 km)", km: 16.093 },
+            { label: "25 Miles (40,2 km)", km: 40.234 },
+            { label: "50 Miles (80,5 km)", km: 80.467 },
+            { label: "100 Miles (160,9 km)", km: 160.934 }
+        ];
+
+        const OFFICIAL_THERMOMETER_DISTANCES = [
+            { label: "1/2 Mile (800 m) — Small/Medium", km: 0.805 },
+            { label: "3 Miles (4,8 km) — Small/Medium", km: 4.828 },
+            { label: "10 Miles (16,1 km) — Medium/Large", km: 16.093 },
+            { label: "50 Miles (80,5 km) — Large", km: 80.467 }
+        ];
+
+        // Alle 20 officielle MATCHING spørgsmål ("Is your nearest ___ the same as my ___?")
+        const OFFICIAL_MATCHING_QUESTIONS = [
+            { id: 'lufthavn', group: 'Transit', label: '✈️ Commercial Airport (Kommerciel Lufthavn)', mode: 'voronoi' },
+            { id: 'transit_line', group: 'Transit', label: '🚆 Transit Line (Samme Tog-/Metrolinje)', mode: 'line_match' },
+            { id: 'station_length', group: 'Transit', label: '🔤 Station\'s Name Length (Længde på stationsnavn)', mode: 'station_length' },
+            { id: 'street_path', group: 'Transit', label: '🛣️ Street or Path (Samme Gade eller Sti)', mode: 'manual' },
+            { id: 'admin_1', group: 'Administrative', label: '🗺️ 1st Admin Division (Region Hovedstaden / Sjælland)', mode: 'voronoi' },
+            { id: 'admin_2', group: 'Administrative', label: '🏛️ 2nd Admin Division (Landsdel)', mode: 'voronoi' },
+            { id: 'kommune', group: 'Administrative', label: '🏙️ 3rd Admin Division (Kommune)', mode: 'voronoi' },
+            { id: 'bydel', group: 'Administrative', label: '🏘️ 4th Admin Division (Bydel / Kvarter)', mode: 'voronoi' },
+            { id: 'mountain', group: 'Natural', label: '⛰️ Mountain / Hill (Nærmeste Bakketop)', mode: 'voronoi' },
+            { id: 'landmass', group: 'Natural', label: '🏝️ Landmass (Samme Ø / Landmasse: Sjælland vs. Amager)', mode: 'landmass' },
+            { id: 'park', group: 'Natural', label: '🌳 Park (Nærmeste Park)', mode: 'voronoi' },
+            { id: 'amusement_park', group: 'Places of Interest', label: '🎡 Amusement Park (Forlystelsespark)', mode: 'voronoi' },
+            { id: 'zoo', group: 'Places of Interest', label: '🦁 Zoo (Zoologisk Have)', mode: 'voronoi' },
+            { id: 'aquarium', group: 'Places of Interest', label: '🐠 Aquarium (Akvarium)', mode: 'voronoi' },
+            { id: 'golf_course', group: 'Places of Interest', label: '⛳ Golf Course (Golfbane)', mode: 'voronoi' },
+            { id: 'museum', group: 'Places of Interest', label: '🏛️ Museum (Museum)', mode: 'voronoi' },
+            { id: 'movie_theater', group: 'Places of Interest', label: '🍿 Movie Theater (Biograf)', mode: 'voronoi' },
+            { id: 'hospital', group: 'Public Utilities', label: '🏥 Hospital (Hospital / Sygehus)', mode: 'voronoi' },
+            { id: 'library', group: 'Public Utilities', label: '📚 Library (Bibliotek)', mode: 'voronoi' },
+            { id: 'consulate', group: 'Public Utilities', label: '🏳️ Foreign Consulate (Ambassade / Konsulat)', mode: 'voronoi' }
+        ];
+
+        // Alle 20 officielle MEASURING spørgsmål ("Compared to me, are you closer to or further from ___?")
+        const OFFICIAL_MEASURING_QUESTIONS = [
+            { id: 'lufthavn', group: 'Transit', label: '✈️ Commercial Airport (Kommerciel Lufthavn)' },
+            { id: 'high_speed_line', group: 'Transit', label: '🚄 High-Speed Train Line (Højhastigheds-/Fjerntogslinje)' },
+            { id: 'station', group: 'Transit', label: '🚆 Rail Station (Tog- eller Metrostation)' },
+            { id: 'international_border', group: 'Borders', label: '🛂 International Border (Landegrænse i Øresund)' },
+            { id: 'admin_border_1', group: 'Borders', label: '🗺️ 1st Admin Division Border (Regionsgrænse)' },
+            { id: 'kommune', group: 'Borders', label: '🏙️ 2nd Admin Division Border (Kommune-centrum)' },
+            { id: 'coastline', group: 'Natural', label: '🌊 Coastline (Kystlinje / Havet)' },
+            { id: 'body_of_water', group: 'Natural', label: '💧 Body of Water (Sø, Å, Kanal eller Hav)' },
+            { id: 'mountain', group: 'Natural', label: '⛰️ Mountain / Peak (Bakketop / Højdepunkt)' },
+            { id: 'park', group: 'Natural', label: '🌳 Park (Park)' },
+            { id: 'amusement_park', group: 'Places of Interest', label: '🎡 Amusement Park (Forlystelsespark)' },
+            { id: 'zoo', group: 'Places of Interest', label: '🦁 Zoo (Zoologisk Have)' },
+            { id: 'aquarium', group: 'Places of Interest', label: '🐠 Aquarium (Akvarium)' },
+            { id: 'golf_course', group: 'Places of Interest', label: '⛳ Golf Course (Golfbane)' },
+            { id: 'museum', group: 'Places of Interest', label: '🏛️ Museum (Museum)' },
+            { id: 'movie_theater', group: 'Places of Interest', label: '🍿 Movie Theater (Biograf)' },
+            { id: 'hospital', group: 'Public Utilities', label: '🏥 Hospital (Hospital)' },
+            { id: 'library', group: 'Public Utilities', label: '📚 Library (Bibliotek)' },
+            { id: 'consulate', group: 'Public Utilities', label: '🏳️ Foreign Consulate (Ambassade / Konsulat)' }
+        ];
+
+        // Alle 8 officielle TENTACLES spørgsmål ("Within X miles of me, which Y are you nearest to?")
+        const OFFICIAL_TENTACLE_QUESTIONS = [
+            { id: 'museum_1m', cat: 'museum', radiusKm: 1.609, label: '🏛️ Museums Within 1 Mile (1,6 km)', shortTitle: 'Museum' },
+            { id: 'library_1m', cat: 'library', radiusKm: 1.609, label: '📚 Libraries Within 1 Mile (1,6 km)', shortTitle: 'Bibliotek' },
+            { id: 'movie_1m', cat: 'movie_theater', radiusKm: 1.609, label: '🍿 Movie Theaters Within 1 Mile (1,6 km)', shortTitle: 'Biograf' },
+            { id: 'hospital_1m', cat: 'hospital', radiusKm: 1.609, label: '🏥 Hospitals Within 1 Mile (1,6 km)', shortTitle: 'Hospital' },
+            { id: 'metro_15m', cat: 'metro', radiusKm: 24.14, label: '🚇 Metro Stations Within 15 Miles (24,1 km)', shortTitle: 'Metrostation' },
+            { id: 'station_15m', cat: 'station', radiusKm: 24.14, label: '🚆 Rail Stations Within 15 Miles (24,1 km)', shortTitle: 'Togstation' },
+            { id: 'zoo_15m', cat: 'zoo', radiusKm: 24.14, label: '🦁 Zoos Within 15 Miles (24,1 km)', shortTitle: 'Zoo' },
+            { id: 'aquarium_15m', cat: 'aquarium', radiusKm: 24.14, label: '🐠 Aquariums Within 15 Miles (24,1 km)', shortTitle: 'Akvarium' },
+            { id: 'amusement_15m', cat: 'amusement_park', radiusKm: 24.14, label: '🎡 Amusement Parks Within 15 Miles (24,1 km)', shortTitle: 'Forlystelsespark' }
+        ];
+
+        // Alle 18 officielle PHOTO spørgsmål direkte fra Jet Lag: Hide and Seek regelbogen
+        const OFFICIAL_PHOTO_QUESTIONS = [
+            { id: 'photo_tree', size: 'Small', title: '🌳 A Tree (Et træ)', text: 'Send et billede af et træ. Hele træet fra rod til krone skal være synligt i billedrammen!' },
+            { id: 'photo_sky', size: 'Small', title: '☁️ The Sky (Himlen lige op)', text: 'Læg telefonen fladt på jorden og tag et billede direkte op mod himlen (ingen zoom)!' },
+            { id: 'photo_you', size: 'Small', title: '🤳 You (Selfie)', text: 'Tag en selfie med telefonen lodret, armen strakt helt ud og standard-linse (ingen zoom)!' },
+            { id: 'photo_widest_street', size: 'Small', title: '🛣️ Widest Street (Bredeste gade)', text: 'Send et billede af den bredeste gade i jeres zone. Begge sider af gaden skal være synlige!' },
+            { id: 'photo_tallest_sightline', size: 'Small', title: '🏢 Tallest Structure in Sightline (Højeste struktur i synslinje)', text: 'Send et billede af den højeste struktur I kan se fra jeres nuværende sted (top og begge sider skal være med, toppen i øverste 1/3)!' },
+            { id: 'photo_any_building_station', size: 'Small', title: '🏠 Any Building Visible from Station (Bygning fra station)', text: 'Stå direkte ude foran stationsindgangen og tag et billede af en bygning (tag og begge sider skal være synlige)!' },
+            { id: 'photo_tallest_station', size: 'Medium', title: '🏙️ Tallest Building Visible from Station (Højeste bygning fra station)', text: 'Stå direkte ude foran stationsindgangen og tag et billede af den højeste synlige bygning (top i øverste 1/3)!' },
+            { id: 'photo_trace_street', size: 'Medium', title: '✏️ Trace Nearest Street/Path (Optegn nærmeste gade)', text: 'Send en optegning af jeres nærmeste gade/sti fra kryds til kryds (uden gadenavne)!' },
+            { id: 'photo_two_buildings', size: 'Medium', title: '🏘️ Two Buildings (To bygninger)', text: 'Send et billede af to bygninger ved siden af hinanden (fra bunden og op til 4. etage)!' },
+            { id: 'photo_restaurant', size: 'Medium', title: '🍽️ Restaurant Interior (Indenfor i en restaurant)', text: 'Tag et billede udefra ind gennem vinduet til en restaurant i jeres zone (ingen zoom)!' },
+            { id: 'photo_platform', size: 'Medium', title: '🚆 Train Platform (Togperronen)', text: 'Send et billede af et 1,5 x 1,5 m udsnit på togperronen med 3 tydelige elementer (uden stationsnavn)!' },
+            { id: 'photo_park', size: 'Medium', title: '🌲 Park (En park)', text: 'Tag et billede i en park uden zoom, telefonen vinkelret på jorden, mindst 1,5 m fra forhindringer!' },
+            { id: 'photo_grocery', size: 'Medium', title: '🛒 Grocery Store Aisle (Supermarkedsgang)', text: 'Stå for enden af en gang i et supermarked og skyd direkte ned ad gangen (ingen zoom)!' },
+            { id: 'photo_worship', size: 'Medium', title: '⛪ Place of Worship (Kirke / Religiøst sted)', text: 'Send et billede af et 1,5 x 1,5 m udsnit af en kirke/religiøst sted med 3 tydelige elementer!' },
+            { id: 'photo_half_mile_streets', size: 'Large', title: '🗺️ 1/2 Mile Streets Traced (800 m gader optegnet)', text: 'Optegn 800 meter sammenhængende gader med mindst 5 sving (nord-syd orienteret, uden gadenavne)!' },
+            { id: 'photo_mountain_station', size: 'Large', title: '⛰️ Tallest Mountain/Hill from Station (Højeste bakke fra station)', text: 'Tag et billede af det højeste punkt/bakke synligt fra stationen (max 3x zoom, toppen i øverste 1/3)!' },
+            { id: 'photo_water_zone', size: 'Large', title: '🌊 Biggest Body of Water in Zone (Største vandområde)', text: 'Send et billede af det største vandområde i jeres zone (max 3x zoom, begge bredder eller horisont synlig)!' },
+            { id: 'photo_five_buildings', size: 'Large', title: '🌇 Five Buildings (Fem bygninger)', text: 'Send et billede af fem bygninger på række (fra bunden op til 4. etage)!' }
         ];
 
         // Map tile servers that NEVER require an API key (even when opened via file:// in Chrome!)
@@ -526,15 +1035,30 @@
             });
         };
 
-        // Builds a GeoJSON Polygon/MultiPolygon for any map object (normal or inverted, Voronoi, Bisector, Direction!)
+        // Hjælpefunktion: Laver et inverteret Polygon med WORLD_OUTER_RING som ydre ramme og huller indeni.
+        // Dette forhindrer 100% de skæve diagonale streger fra turf.difference ved lufthavne og cirkler!
+        const createInvertedHoleGeoJSON = (innerGeoJSON) => {
+            if (!innerGeoJSON || !innerGeoJSON.geometry) return null;
+            const geom = innerGeoJSON.geometry;
+            const holes = [];
+            if (geom.type === 'Polygon' && geom.coordinates.length > 0) {
+                holes.push(geom.coordinates[0]);
+            } else if (geom.type === 'MultiPolygon') {
+                geom.coordinates.forEach(polyCoords => {
+                    if (polyCoords && polyCoords.length > 0) holes.push(polyCoords[0]);
+                });
+            }
+            if (holes.length === 0) return null;
+            return turf.polygon([WORLD_OUTER_RING, ...holes]);
+        };
+
+        // Builds a GeoJSON Polygon/MultiPolygon for any map object (normal or inverted, Voronoi, Bisector, Station Length, Landmass!)
         const buildExclusionGeoJSON = (obj) => {
             try {
-                const worldPoly = turf.bboxPolygon(DENMARK_BBOX);
-
                 if (obj.type === 'radius') {
-                    const circle = turf.circle([obj.lng, obj.lat], obj.radiusKm, { steps: 64, units: 'kilometers' });
+                    const circle = turf.circle([obj.lng, obj.lat], obj.radiusKm, { steps: 96, units: 'kilometers' });
                     if (obj.invert) {
-                        return turf.difference(worldPoly, circle);
+                        return createInvertedHoleGeoJSON(circle);
                     }
                     return circle;
                 }
@@ -544,77 +1068,45 @@
                     ring.push([obj.coords[0].lng, obj.coords[0].lat]);
                     const poly = turf.polygon([ring]);
                     if (obj.invert) {
-                        return turf.difference(worldPoly, poly);
+                        return createInvertedHoleGeoJSON(poly);
                     }
                     return poly;
                 }
 
                 if (obj.type === 'compound_radius' && obj.points && obj.points.length > 0) {
                     const circles = obj.points.map(pt =>
-                        turf.circle([pt.lng, pt.lat], obj.radiusKm, { steps: 32, units: 'kilometers' })
+                        turf.circle([pt.lng, pt.lat], obj.radiusKm, { steps: 48, units: 'kilometers' })
                     );
                     let combined = circles[0];
                     for (let i = 1; i < circles.length; i++) {
                         try {
-                            combined = turf.union(combined, circles[i]);
+                            const u = turf.union(combined, circles[i]);
+                            if (u) combined = u;
                         } catch (e) {}
                     }
                     if (obj.invert) {
-                        return turf.difference(worldPoly, combined);
+                        return createInvertedHoleGeoJSON(combined);
                     }
                     return combined;
                 }
 
+                // Eksakt Kilometer-Voronoi celle (fungerer fejfri for 2, 3 eller 40 lufthavne/stationer/museer!)
                 if (obj.type === 'voronoi_cell' && obj.points && obj.points.length > 1 && typeof obj.targetIdx === 'number') {
-                    const fc = turf.featureCollection(obj.points.map(p => turf.point([p.lng, p.lat])));
-                    const voronoiPolys = turf.voronoi(fc, { bbox: DENMARK_BBOX });
-                    const cell = voronoiPolys.features[obj.targetIdx];
-                    if (cell) {
+                    const cellRing = computeExactVoronoiRingLngLat(obj.points, obj.targetIdx);
+                    if (cellRing) {
                         if (obj.invert) {
-                            return turf.difference(worldPoly, cell);
+                            return turf.polygon([WORLD_OUTER_RING, cellRing]);
                         }
-                        return cell;
+                        return turf.polygon([cellRing]);
                     }
                 }
 
-                // Cardinal Half-Plane (North/South/East/West Measuring)
-                if (obj.type === 'cardinal_half') {
-                    const [minX, minY, maxX, maxY] = DENMARK_BBOX;
-                    if (obj.eliminateDirection === 'north') {
-                        return turf.bboxPolygon([minX, obj.lat, maxX, maxY]);
-                    }
-                    if (obj.eliminateDirection === 'south') {
-                        return turf.bboxPolygon([minX, minY, maxX, obj.lat]);
-                    }
-                    if (obj.eliminateDirection === 'east') {
-                        return turf.bboxPolygon([obj.lng, minY, maxX, maxY]);
-                    }
-                    if (obj.eliminateDirection === 'west') {
-                        return turf.bboxPolygon([minX, minY, obj.lng, maxY]);
-                    }
-                }
-
+                // Eksakt Kilometer-Termometer (100% vinkelret halveringslinje mellem A og B)
                 if (obj.type === 'thermometer' && obj.pointA && obj.pointB) {
-                    const pA = turf.point([obj.pointA.lng, obj.pointA.lat]);
-                    const pB = turf.point([obj.pointB.lng, obj.pointB.lat]);
-                    const mid = turf.midpoint(pA, pB);
-                    const bearingAB = turf.bearing(pA, pB);
-                    
-                    const elimBearing = obj.warmer ? (bearingAB + 180) : bearingAB;
-                    const perpLeft = turf.destination(mid, 180, elimBearing - 90, { units: 'kilometers' });
-                    const perpRight = turf.destination(mid, 180, elimBearing + 90, { units: 'kilometers' });
-                    const farBackLeft = turf.destination(perpLeft, 180, elimBearing, { units: 'kilometers' });
-                    const farBackRight = turf.destination(perpRight, 180, elimBearing, { units: 'kilometers' });
-
-                    const coords = [
-                        perpLeft.geometry.coordinates,
-                        perpRight.geometry.coordinates,
-                        farBackRight.geometry.coordinates,
-                        farBackLeft.geometry.coordinates,
-                        perpLeft.geometry.coordinates
-                    ];
-                    const halfPlane = turf.polygon([coords]);
-                    return turf.intersect(worldPoly, halfPlane) || halfPlane;
+                    const halfRing = computeExactThermometerRingLngLat(obj.pointA, obj.pointB, obj.warmer);
+                    if (halfRing) {
+                        return turf.polygon([halfRing]);
+                    }
                 }
             } catch (err) {
                 console.warn("GeoJSON calculation warning:", err);
@@ -888,6 +1380,7 @@
             // Local UI & Map states
             const [mapTheme, setMapTheme] = useState('map-mint');
             const [showHubs, setShowHubs] = useState(true);
+            const [soundMuted, setSoundMuted] = useState(false);
             const [hiderShowSeekerZones, setHiderShowSeekerZones] = useState(false); // Hiders get a clean map by default!
             const [hiderLockedSpot, setHiderLockedSpot] = useState(null);
             const [activeTool, setActiveTool] = useState(null);
@@ -900,12 +1393,17 @@
             const [myCoords, setMyCoords] = useState({ lat: 55.6761, lng: 12.5683 });
             const [unreadCount, setUnreadCount] = useState(0);
 
+            // 10-15 Sekunders Spændings- & Telemetri-Ventetid + Svar-Reveal Modal
+            const [pendingTelemetry, setPendingTelemetry] = useState(null);
+            // { category, title, questionText, secondsLeft, totalSeconds, stepText }
+            const [revealOverlay, setRevealOverlay] = useState(null);
+            // { category, headline, subtext, isPositive, cardReward }
+
             // Seeker Question Menu & Manual Tool Builder States
-            const [qRadarKm, setQRadarKm] = useState(5);
-            const [qMeasureTarget, setQMeasureTarget] = useState('vand');
-            const [qMatchCategory, setQMatchCategory] = useState('kommune');
-            const [qTentacleCategory, setQTentacleCategory] = useState('station');
-            const [qTentacleRadiusKm, setQTentacleRadiusKm] = useState(15);
+            const [qRadarKm, setQRadarKm] = useState(4.828);
+            const [qMeasureTarget, setQMeasureTarget] = useState('lufthavn');
+            const [qMatchCategory, setQMatchCategory] = useState('lufthavn');
+            const [qTentacleId, setQTentacleId] = useState('museum_1m');
             const [customQuestionText, setCustomQuestionText] = useState("");
 
             // Hider Manual Answer & Photo Upload state
@@ -1316,13 +1814,14 @@
                                 weight: myRole === 'hider' ? 2 : 3,
                                 dashArray: '8, 6',
                                 fillColor: '#DB3832',
-                                fillOpacity: myRole === 'hider' ? 0.22 : 0.42
+                                fillOpacity: myRole === 'hider' ? 0.22 : 0.42,
+                                fillRule: 'evenodd'
                             }
                         }).addTo(layersRef.current.exclusions);
 
                         if (myRole === 'seeker') {
                             layer.bindPopup(`
-                                <div style="font-family:'Plus Jakarta Sans',sans-serif; padding:4px; min-width:160px;">
+                                <div style="font-family:'Plus Jakarta Sans',sans-serif; padding:4px; min-width:170px;">
                                     <div style="font-weight:800; color:#1B2634; font-size:14px; margin-bottom:2px;">${obj.label || 'Rød Udelukkelseszone'}</div>
                                     <div style="font-size:11px; color:#64748b; margin-bottom:8px;">Tilføjet af ${obj.createdByName || 'Spiller'}</div>
                                     <button id="remove-zone-${obj.id}" style="width:100%; background:#DB3832; color:white; font-weight:700; border:none; padding:6px 10px; border-radius:6px; cursor:pointer;">
@@ -1336,6 +1835,21 @@
                                 if (btn) btn.onclick = () => handleDeleteObject(obj.id);
                             });
                         }
+                    }
+
+                    // Vis reference-punkter (f.eks. Lufthavne / Museer / Hospitaler) så man kan se præcis hvorfor linjen skærer der!
+                    if (obj.refPoints && Array.isArray(obj.refPoints)) {
+                        obj.refPoints.forEach(pt => {
+                            if (typeof pt.lat === 'number' && typeof pt.lng === 'number' && pt.name) {
+                                const chipIcon = L.divIcon({
+                                    className: '',
+                                    html: `<div class="jl-poi-chip">📍 ${pt.name}</div>`,
+                                    iconSize: [110, 20],
+                                    iconAnchor: [55, 10]
+                                });
+                                L.marker([pt.lat, pt.lng], { icon: chipIcon, interactive: false }).addTo(layersRef.current.exclusions);
+                            }
+                        });
                     }
                 });
             }, [mapObjects, myRole, hiderShowSeekerZones]);
@@ -1526,307 +2040,570 @@
                 }
             };
 
-            // 1. AUTO RADAR QUESTION ("Er I inden for X km af os?")
-            const handleAskAutoRadar = async (customKm) => {
-                if (!user) return;
-                const km = parseFloat(customKm ?? qRadarKm) || 5;
-                const seekerPt = turf.point([myCoords.lng, myCoords.lat]);
-                const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
-                const actualDist = turf.distance(seekerPt, hiderPt, { units: 'kilometers' });
-                const isInside = actualDist <= km;
+            // ============================================================================
+            // 10–15 SEKUNDERS TELEMETRI-VENTETID & BROADCAST REVEAL MOTOR
+            // ============================================================================
+            const runWithBroadcastSuspense = ({ category, title, questionText, cardReward, onComplete }) => {
+                setActiveTool(null);
+                JetLagAudio.playQuestionSent();
 
-                const answerText = isInside
-                    ? `✅ JA! Gemmerne ER inden for ${km} km af jer! (Alt uden for ${km} km er nu farvet rødt)`
-                    : `❌ NEJ! Gemmerne er IKKE inden for ${km} km af jer! (Cirklen på ${km} km er nu farvet rød)`;
+                // Send besked i chatten med det samme om at spørgsmålet er stillet og afventer svar
+                sendChatMessage(`📡 [SPØRGSMÅL SENDT — ${category}]: "${questionText}" (Afventer svar om 12 sek... Gemmer trækker: ${cardReward})`);
 
-                await saveMapObject({
-                    type: 'radius',
-                    lat: myCoords.lat,
-                    lng: myCoords.lng,
-                    radiusKm: km,
-                    invert: isInside,
-                    label: `Auto-Radar (${km} km): ${isInside ? 'JA (Indenfor)' : 'NEJ (Udenfor)'}`
+                const waitSecs = 12; // 12 sekunders spændings-ventetid
+                let remaining = waitSecs;
+
+                const getStepText = (secLeft) => {
+                    if (secLeft > 9) return "📡 Sender krypteret spørgsmål til Gemmerne...";
+                    if (secLeft > 5) return "🛰️ Indhenter GPS-telemetri fra Zone 1–99...";
+                    if (secLeft > 2) return "📐 Beregner præcis geografisk skæringslinje...";
+                    return "🔐 Låser svar fast og farver kortet...";
+                };
+
+                setPendingTelemetry({
+                    category,
+                    title,
+                    questionText,
+                    cardReward,
+                    secondsLeft: remaining,
+                    totalSeconds: waitSecs,
+                    stepText: getStepText(remaining)
                 });
 
-                const qObj = {
-                    id: `q_${Date.now()}`,
-                    roomCode,
-                    category: 'RADAR',
-                    questionText: `🎯 Radar: Er I inden for ${km} km af vores position?`,
-                    answerText,
-                    status: 'answered',
-                    autoAnswered: true,
-                    askedBy: playerName,
-                    createdAtMillis: Date.now()
-                };
-                await upsertQuestionRecord(qObj);
-                await sendChatMessage(`${qObj.questionText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                setActiveTool(null);
-                notify(answerText);
+                const intervalId = setInterval(async () => {
+                    remaining -= 1;
+                    if (remaining > 0) {
+                        JetLagAudio.playCountdownTick(remaining);
+                        setPendingTelemetry(prev => prev ? {
+                            ...prev,
+                            secondsLeft: remaining,
+                            stepText: getStepText(remaining)
+                        } : null);
+                    } else {
+                        clearInterval(intervalId);
+                        setPendingTelemetry(null);
+                        await onComplete();
+                    }
+                }, 1000);
             };
 
-            // 2. AUTO THERMOMETER QUESTION ("Vi har flyttet os fra A til B – Varmere eller Koldere?")
-            const handleAskAutoThermometer = async () => {
-                if (!user || !thermoA || !thermoB) return;
+            const triggerBroadcastReveal = ({ category, headline, subtext, isPositive, cardReward }) => {
+                JetLagAudio.playAnswerReveal(isPositive);
+                setRevealOverlay({ category, headline, subtext, isPositive, cardReward });
+                setTimeout(() => {
+                    setRevealOverlay(prev => (prev && prev.headline === headline ? null : prev));
+                }, 5500);
+            };
+
+            // Tjek om et spørgsmål allerede er brugt i denne runde
+            const isQuestionUsed = (qKey) => {
+                return questionsLog.some(q => q.questionKey === qKey);
+            };
+
+            // 1. OFFICIAL RADAR QUESTION ("Are you within X of me?") — Cost: Draw 2, Keep 1
+            const handleAskAutoRadar = (customKm) => {
+                if (!user || pendingTelemetry) return;
+                const km = parseFloat(customKm ?? qRadarKm) || 4.828;
+                const kmLabel = km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+                const qText = `🎯 Radar: "Er du inden for ${kmLabel} af mig?"`;
+
+                runWithBroadcastSuspense({
+                    category: 'RADAR',
+                    title: `RADAR (${kmLabel})`,
+                    questionText: qText,
+                    cardReward: 'Træk 2 kort, behold 1',
+                    onComplete: async () => {
+                        const seekerPt = turf.point([myCoords.lng, myCoords.lat]);
+                        const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
+                        const actualDist = turf.distance(seekerPt, hiderPt, { units: 'kilometers' });
+                        const isInside = actualDist <= km;
+
+                        const headline = isInside ? `✅ JA! INDEN FOR ${kmLabel}` : `❌ NEJ! UDEN FOR ${kmLabel}`;
+                        const answerText = isInside
+                            ? `✅ JA! Gemmeren ER inden for ${kmLabel} af jer! (Alt uden for ${kmLabel} er nu farvet rødt)`
+                            : `❌ NEJ! Gemmeren er IKKE inden for ${kmLabel} af jer! (Cirklen på ${kmLabel} er nu farvet rød)`;
+
+                        await saveMapObject({
+                            type: 'radius',
+                            lat: myCoords.lat,
+                            lng: myCoords.lng,
+                            radiusKm: km,
+                            invert: isInside,
+                            label: `Radar (${kmLabel}): ${isInside ? 'JA (Indenfor)' : 'NEJ (Udenfor)'}`
+                        });
+
+                        await upsertQuestionRecord({
+                            id: `q_${Date.now()}`,
+                            questionKey: `radar_${km}`,
+                            roomCode,
+                            category: 'RADAR',
+                            questionText: qText,
+                            answerText,
+                            status: 'answered',
+                            autoAnswered: true,
+                            askedBy: playerName,
+                            createdAtMillis: Date.now()
+                        });
+                        await sendChatMessage(`🚨 SVAR PÅ RADAR (${kmLabel}): ${answerText}`);
+                        triggerBroadcastReveal({
+                            category: 'RADAR SVAR',
+                            headline,
+                            subtext: answerText,
+                            isPositive: isInside,
+                            cardReward: 'Gemmer trækker 2 kort, beholder 1'
+                        });
+                    }
+                });
+            };
+
+            // 2. OFFICIAL THERMOMETER QUESTION ("After traveling X, am I hotter or colder?") — Cost: Draw 2, Keep 1
+            const handleAskAutoThermometer = () => {
+                if (!user || !thermoA || !thermoB || pendingTelemetry) return;
                 const ptA = turf.point([thermoA.lng, thermoA.lat]);
                 const ptB = turf.point([thermoB.lng, thermoB.lat]);
-                const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
-
-                const distA = turf.distance(ptA, hiderPt, { units: 'kilometers' });
-                const distB = turf.distance(ptB, hiderPt, { units: 'kilometers' });
                 const moveDist = turf.distance(ptA, ptB, { units: 'kilometers' }).toFixed(2);
-                const isWarmer = distB < distA;
+                const snapA = { ...thermoA };
+                const snapB = { ...thermoB };
+                const qText = `🌡️ Thermometer: "Efter at have rejst ${moveDist} km (fra A til B), er jeg så Varmere eller Koldere?"`;
 
-                const answerText = isWarmer
-                    ? `🔥 VARMERE! I er kommet tættere på gemmerne ved punkt B! (Den kolde halvdel mod A er farvet rød)`
-                    : `❄️ KOLDERE! I er kommet længere væk ved punkt B! (Halvdelen mod B er farvet rød)`;
-
-                await saveMapObject({
-                    type: 'thermometer',
-                    pointA: thermoA,
-                    pointB: thermoB,
-                    warmer: isWarmer,
-                    label: `Auto-Termometer (${moveDist} km): ${isWarmer ? 'VARMERE 🔥' : 'KOLDERE ❄️'}`
-                });
-
-                const qObj = {
-                    id: `q_${Date.now()}`,
-                    roomCode,
-                    category: 'TERMOMETER',
-                    questionText: `🌡️ Termometer (${moveDist} km flyt fra A til B): Er vi Varmere eller Koldere?`,
-                    answerText,
-                    status: 'answered',
-                    autoAnswered: true,
-                    askedBy: playerName,
-                    createdAtMillis: Date.now()
-                };
-                await upsertQuestionRecord(qObj);
-                await sendChatMessage(`${qObj.questionText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                setThermoA(null);
-                setThermoB(null);
-                setActiveTool(null);
-                notify(answerText);
-            };
-
-            // 3. AUTO MEASURING QUESTION ("Er I tættere på eller længere fra [X] end os?")
-            const handleAskAutoMeasuring = async () => {
-                if (!user) return;
-                const target = qMeasureTarget;
-
-                if (target === 'nord' || target === 'oest') {
-                    const isNorth = target === 'nord';
-                    const hiderVal = isNorth ? activeHiderTarget.lat : activeHiderTarget.lng;
-                    const seekerVal = isNorth ? myCoords.lat : myCoords.lng;
-                    const hiderGreater = hiderVal > seekerVal;
-
-                    const dirLabel = isNorth
-                        ? (hiderGreater ? '🧭 NORDLIGERE end jer!' : '🧭 SYDLIGERE end jer!')
-                        : (hiderGreater ? '🧭 ØSTLIGERE end jer!' : '🧭 VESTLIGERE end jer!');
-
-                    const eliminateDirection = isNorth
-                        ? (hiderGreater ? 'south' : 'north')
-                        : (hiderGreater ? 'west' : 'east');
-
-                    await saveMapObject({
-                        type: 'cardinal_half',
-                        lat: myCoords.lat,
-                        lng: myCoords.lng,
-                        eliminateDirection,
-                        label: `Auto-Measuring: Gemmer er ${dirLabel}`
-                    });
-
-                    const qText = isNorth
-                        ? `📏 Measuring: Er I nordligere eller sydligere end vores breddegrad?`
-                        : `📏 Measuring: Er I østligere eller vestligere end vores længdegrad?`;
-                    const ans = `🤖 AUTO-SVAR: Gemmerne er ${dirLabel}`;
-
-                    await upsertQuestionRecord({
-                        id: `q_${Date.now()}`,
-                        roomCode,
-                        category: 'MEASURING',
-                        questionText: qText,
-                        answerText: ans,
-                        status: 'answered',
-                        autoAnswered: true,
-                        askedBy: playerName,
-                        createdAtMillis: Date.now()
-                    });
-                    await sendChatMessage(`${qText} ➔ ${ans}`);
-                    setActiveTool(null);
-                    notify(ans);
-                    return;
-                }
-
-                const catMap = {
-                    vand: { list: BUILTIN_GEO_DATA.vand, title: 'Havet / Vand / Kyst' },
-                    station: { list: BUILTIN_GEO_DATA.station, title: 'Nærmeste Togstation' },
-                    metro: { list: BUILTIN_GEO_DATA.metro, title: 'Nærmeste Metrostation' },
-                    lufthavn: { list: BUILTIN_GEO_DATA.lufthavn, title: 'Nærmeste Lufthavn' },
-                    kbh_h: { list: [{ name: "København H", lat: 55.6726, lng: 12.5649 }], title: 'København H' }
-                };
-
-                const chosen = catMap[target] || catMap.vand;
-                const seekerNearest = getNearestPOI(myCoords.lat, myCoords.lng, chosen.list);
-                const hiderNearest = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, chosen.list);
-
-                if (!seekerNearest || !hiderNearest) return;
-
-                const seekerDist = Math.max(0.4, parseFloat(seekerNearest.distanceKm.toFixed(2)));
-                const hiderCloser = hiderNearest.distanceKm <= seekerNearest.distanceKm;
-
-                const answerText = hiderCloser
-                    ? `🌊 TÆTTERE PÅ! Gemmerne er TÆTTERE på ${chosen.title} end jer (< ${seekerDist} km). Alt længere væk er farvet rødt!`
-                    : `🏔️ LÆNGERE VÆK! Gemmerne er LÆNGERE fra ${chosen.title} end jer (> ${seekerDist} km). Alt inden for ${seekerDist} km er farvet rødt!`;
-
-                await saveMapObject({
-                    type: 'compound_radius',
-                    category: target,
-                    points: chosen.list.map(p => ({ lat: p.lat, lng: p.lng })),
-                    radiusKm: seekerDist,
-                    invert: hiderCloser,
-                    label: `Auto-Measuring (${chosen.title}, ${seekerDist} km): ${hiderCloser ? 'Tættere på' : 'Længere væk'}`
-                });
-
-                const qText = `📏 Measuring: Er I tættere på eller længere fra ${chosen.title} end os (${seekerDist} km)?`;
-                await upsertQuestionRecord({
-                    id: `q_${Date.now()}`,
-                    roomCode,
-                    category: 'MEASURING',
+                runWithBroadcastSuspense({
+                    category: 'THERMOMETER',
+                    title: `TERMOMETER (${moveDist} km)`,
                     questionText: qText,
-                    answerText,
-                    status: 'answered',
-                    autoAnswered: true,
-                    askedBy: playerName,
-                    createdAtMillis: Date.now()
+                    cardReward: 'Træk 2 kort, behold 1',
+                    onComplete: async () => {
+                        const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
+                        const distA = turf.distance(ptA, hiderPt, { units: 'kilometers' });
+                        const distB = turf.distance(ptB, hiderPt, { units: 'kilometers' });
+                        const isWarmer = distB < distA;
+
+                        const headline = isWarmer ? `🔥 VARMERE! (HOTTER)` : `❄️ KOLDERE! (COLDER)`;
+                        const answerText = isWarmer
+                            ? `🔥 VARMERE! I er kommet tættere på gemmeren ved punkt B! (Den kolde halvdel mod A er nu skåret væk og farvet rød)`
+                            : `❄️ KOLDERE! I er kommet længere væk ved punkt B! (Halvdelen mod B er nu skåret væk og farvet rød)`;
+
+                        await saveMapObject({
+                            type: 'thermometer',
+                            pointA: snapA,
+                            pointB: snapB,
+                            warmer: isWarmer,
+                            refPoints: [
+                                { name: "Start (A)", lat: snapA.lat, lng: snapA.lng },
+                                { name: "Slut (B)", lat: snapB.lat, lng: snapB.lng }
+                            ],
+                            label: `Termometer (${moveDist} km): ${isWarmer ? 'VARMERE 🔥' : 'KOLDERE ❄️'}`
+                        });
+
+                        await upsertQuestionRecord({
+                            id: `q_${Date.now()}`,
+                            questionKey: `thermo_${moveDist}`,
+                            roomCode,
+                            category: 'THERMOMETER',
+                            questionText: qText,
+                            answerText,
+                            status: 'answered',
+                            autoAnswered: true,
+                            askedBy: playerName,
+                            createdAtMillis: Date.now()
+                        });
+                        await sendChatMessage(`🚨 SVAR PÅ TERMOMETER: ${answerText}`);
+                        setThermoA(null);
+                        setThermoB(null);
+                        triggerBroadcastReveal({
+                            category: 'TERMOMETER SVAR',
+                            headline,
+                            subtext: answerText,
+                            isPositive: isWarmer,
+                            cardReward: 'Gemmer trækker 2 kort, beholder 1'
+                        });
+                    }
                 });
-                await sendChatMessage(`${qText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                setActiveTool(null);
-                notify(answerText);
             };
 
-            // 4. AUTO MATCHING QUESTION ("Er jeres nærmeste [Kategori] den samme som vores?")
-            const handleAskAutoMatching = async () => {
-                if (!user) return;
-                const catTitles = {
-                    kommune: 'Bydel / Kommune',
-                    station: 'Tog- / S-togsstation',
-                    metro: 'Metrostation',
-                    lufthavn: 'Lufthavn',
-                    hospital: 'Hospital'
-                };
-                const list = BUILTIN_GEO_DATA[qMatchCategory] || BUILTIN_GEO_DATA.kommune;
+            // 3. OFFICIAL MEASURING QUESTION ("Compared to me, are you closer to or further from ___?") — Cost: Draw 3, Keep 1
+            const handleAskAutoMeasuring = () => {
+                if (!user || pendingTelemetry) return;
+                const qMeta = OFFICIAL_MEASURING_QUESTIONS.find(q => q.id === qMeasureTarget) || OFFICIAL_MEASURING_QUESTIONS[0];
+                const list = BUILTIN_GEO_DATA[qMeta.id] || BUILTIN_GEO_DATA.lufthavn;
                 const seekerNearest = getNearestPOI(myCoords.lat, myCoords.lng, list);
-                const hiderNearest = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, list);
+                if (!seekerNearest) return;
+                const seekerDist = Math.max(0.25, parseFloat(seekerNearest.distanceKm.toFixed(2)));
+                const qText = `📏 Measuring: "Sammenlignet med mig (${seekerDist} km), er du så tættere på eller længere fra ${qMeta.label}?"`;
 
-                if (!seekerNearest || !hiderNearest) return;
-
-                const isSame = seekerNearest.index === hiderNearest.index;
-                const answerText = isSame
-                    ? `✅ JA (MATCH)! Gemmernes nærmeste ${catTitles[qMatchCategory]} er OGSÅ ${seekerNearest.name}! (Kun denne zone er nu åben)`
-                    : `❌ NEJ (IKKE MATCH)! Gemmernes nærmeste ${catTitles[qMatchCategory]} er IKKE ${seekerNearest.name}! (Zonen for ${seekerNearest.name} er nu farvet rød)`;
-
-                await saveMapObject({
-                    type: 'voronoi_cell',
-                    points: list.map(p => ({ lat: p.lat, lng: p.lng })),
-                    targetIdx: seekerNearest.index,
-                    invert: isSame,
-                    label: `Auto-Matching (${seekerNearest.name}): ${isSame ? 'JA' : 'NEJ'}`
-                });
-
-                const qText = `🧩 Matching: Er jeres nærmeste ${catTitles[qMatchCategory]} den samme som vores (${seekerNearest.name})?`;
-                await upsertQuestionRecord({
-                    id: `q_${Date.now()}`,
-                    roomCode,
-                    category: 'MATCHING',
+                runWithBroadcastSuspense({
+                    category: 'MEASURING',
+                    title: `MEASURING: ${qMeta.label}`,
                     questionText: qText,
-                    answerText,
-                    status: 'answered',
-                    autoAnswered: true,
-                    askedBy: playerName,
-                    createdAtMillis: Date.now()
+                    cardReward: 'Træk 3 kort, behold 1',
+                    onComplete: async () => {
+                        const hiderNearest = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, list);
+                        const hiderCloser = hiderNearest.distanceKm <= seekerNearest.distanceKm;
+
+                        const headline = hiderCloser ? `🌊 TÆTTERE PÅ! (CLOSER)` : `🏔️ LÆNGERE VÆK! (FURTHER)`;
+                        const answerText = hiderCloser
+                            ? `🌊 TÆTTERE PÅ! Gemmeren er TÆTTERE på ${qMeta.label} end jer (< ${seekerDist} km). Alt længere væk end ${seekerDist} km er nu farvet rødt!`
+                            : `🏔️ LÆNGERE VÆK! Gemmeren er LÆNGERE fra ${qMeta.label} end jer (> ${seekerDist} km). Cirklerne på ${seekerDist} km er nu farvet røde!`;
+
+                        await saveMapObject({
+                            type: 'compound_radius',
+                            category: qMeta.id,
+                            points: list.map(p => ({ lat: p.lat, lng: p.lng })),
+                            refPoints: list.length <= 12 ? list : [seekerNearest],
+                            radiusKm: seekerDist,
+                            invert: hiderCloser,
+                            label: `Measuring (${qMeta.label}, ${seekerDist} km): ${hiderCloser ? 'Tættere på' : 'Længere væk'}`
+                        });
+
+                        await upsertQuestionRecord({
+                            id: `q_${Date.now()}`,
+                            questionKey: `measure_${qMeta.id}`,
+                            roomCode,
+                            category: 'MEASURING',
+                            questionText: qText,
+                            answerText,
+                            status: 'answered',
+                            autoAnswered: true,
+                            askedBy: playerName,
+                            createdAtMillis: Date.now()
+                        });
+                        await sendChatMessage(`🚨 SVAR PÅ MEASURING: ${answerText}`);
+                        triggerBroadcastReveal({
+                            category: 'MEASURING SVAR',
+                            headline,
+                            subtext: answerText,
+                            isPositive: hiderCloser,
+                            cardReward: 'Gemmer trækker 3 kort, beholder 1'
+                        });
+                    }
                 });
-                await sendChatMessage(`${qText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                setActiveTool(null);
-                notify(answerText);
             };
 
-            // 5. AUTO TENTACLES QUESTION ("Inden for X km af os, hvilken [X] er I tættest på?")
-            const handleAskAutoTentacles = async () => {
-                if (!user) return;
-                const km = parseFloat(qTentacleRadiusKm) || 15;
-                const list = BUILTIN_GEO_DATA[qTentacleCategory] || BUILTIN_GEO_DATA.station;
-                const catTitles = {
-                    station: 'Togstation',
-                    metro: 'Metrostation',
-                    kommune: 'Bydel / Kommune',
-                    hospital: 'Hospital'
-                };
+            // 4. OFFICIAL MATCHING QUESTION ("Is your nearest ___ the same as my ___?") — Cost: Draw 3, Keep 1
+            const handleAskAutoMatching = () => {
+                if (!user || pendingTelemetry) return;
+                const qMeta = OFFICIAL_MATCHING_QUESTIONS.find(q => q.id === qMatchCategory) || OFFICIAL_MATCHING_QUESTIONS[0];
 
-                const seekerPt = turf.point([myCoords.lng, myCoords.lat]);
-                const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
-                const distToHider = turf.distance(seekerPt, hiderPt, { units: 'kilometers' });
-
-                // Filter candidate POIs within km of Seeker (or fallback to all if <2)
-                let candidates = list.filter(item =>
-                    turf.distance(seekerPt, turf.point([item.lng, item.lat]), { units: 'kilometers' }) <= km
-                );
-                if (candidates.length < 2) candidates = list;
-
-                if (distToHider > km) {
-                    const answerText = `❌ UDEN FOR RÆKKEVIDDE! Gemmerne er slet ikke inden for ${km} km af jer! (Cirklen på ${km} km er farvet rød)`;
-                    await saveMapObject({
-                        type: 'radius',
-                        lat: myCoords.lat,
-                        lng: myCoords.lng,
-                        radiusKm: km,
-                        invert: false,
-                        label: `Auto-Tentacles (${km} km): Uden for rækkevidde`
+                // Hvis spørgsmålet er "Street or Path" sendes det til Gemmerens indbakke
+                if (qMeta.mode === 'manual') {
+                    handleSendManualOrPhotoQuestion({
+                        id: qMeta.id,
+                        type: 'text',
+                        title: `🧩 Matching: ${qMeta.label}`,
+                        text: `Er din gade/sti den samme som vores nuværende gade? (Svar JA eller NEJ — Træk 3 kort, behold 1)`
                     });
-
-                    const qText = `🐙 Tentacles (${km} km): Hvilken ${catTitles[qTentacleCategory]} tæt på os er I tættest på?`;
-                    await upsertQuestionRecord({
-                        id: `q_${Date.now()}`,
-                        roomCode,
-                        category: 'TENTACLES',
-                        questionText: qText,
-                        answerText,
-                        status: 'answered',
-                        autoAnswered: true,
-                        askedBy: playerName,
-                        createdAtMillis: Date.now()
-                    });
-                    await sendChatMessage(`${qText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                    setActiveTool(null);
-                    notify(answerText);
                     return;
                 }
 
-                const winningPOI = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, candidates);
-                const answerText = `🐙 TENTACLES SVAR: Inden for ${km} km er gemmerne tættest på ${winningPOI.name}! (Kun denne tentakel-zone er nu åben)`;
+                // Special officiel Matching: Station's Name Length (antal tegn i nærmeste stations navn!)
+                if (qMeta.mode === 'station_length') {
+                    const stList = BUILTIN_GEO_DATA.station;
+                    const seekerSt = getNearestPOI(myCoords.lat, myCoords.lng, stList);
+                    const seekerLen = seekerSt.name.length;
+                    const qText = `🧩 Matching: "Har din nærmeste togstation samme navnelængde som vores (${seekerSt.name} = ${seekerLen} tegn)?"`;
 
-                await saveMapObject({
-                    type: 'voronoi_cell',
-                    points: candidates.map(p => ({ lat: p.lat, lng: p.lng })),
-                    targetIdx: winningPOI.index,
-                    invert: true,
-                    label: `Auto-Tentacles: Tættest på ${winningPOI.name}`
-                });
+                    runWithBroadcastSuspense({
+                        category: 'MATCHING',
+                        title: `STATIONSNAVN LÆNGDE (${seekerLen} TEGN)`,
+                        questionText: qText,
+                        cardReward: 'Træk 3 kort, behold 1',
+                        onComplete: async () => {
+                            const hiderSt = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, stList);
+                            const isSameLen = hiderSt.name.length === seekerLen;
+                            const headline = isSameLen ? `✅ JA! (${seekerLen} TEGN)` : `❌ NEJ! (IKKE ${seekerLen} TEGN)`;
+                            const answerText = isSameLen
+                                ? `✅ JA! Gemmerens nærmeste station har OGSÅ ${seekerLen} tegn i navnet!`
+                                : `❌ NEJ! Gemmerens nærmeste station har IKKE ${seekerLen} tegn i navnet!`;
 
-                const qText = `🐙 Tentacles (${km} km): Hvilken ${catTitles[qTentacleCategory]} er I tættest på?`;
-                await upsertQuestionRecord({
-                    id: `q_${Date.now()}`,
-                    roomCode,
-                    category: 'TENTACLES',
+                            // Udeluk alle stationer der ikke passer (0.5 km cirkler omkring udelukkede stationer)
+                            const excludedStations = stList.filter(s => isSameLen ? s.name.length !== seekerLen : s.name.length === seekerLen);
+                            await saveMapObject({
+                                type: 'compound_radius',
+                                points: excludedStations.map(s => ({ lat: s.lat, lng: s.lng })),
+                                radiusKm: 0.8,
+                                invert: false,
+                                label: `Stationsnavn (${seekerLen} tegn): ${isSameLen ? 'JA' : 'NEJ'}`
+                            });
+
+                            await upsertQuestionRecord({
+                                id: `q_${Date.now()}`,
+                                questionKey: `match_${qMeta.id}`,
+                                roomCode,
+                                category: 'MATCHING',
+                                questionText: qText,
+                                answerText,
+                                status: 'answered',
+                                autoAnswered: true,
+                                askedBy: playerName,
+                                createdAtMillis: Date.now()
+                            });
+                            await sendChatMessage(`🚨 SVAR PÅ MATCHING: ${answerText}`);
+                            triggerBroadcastReveal({
+                                category: 'MATCHING SVAR',
+                                headline,
+                                subtext: answerText,
+                                isPositive: isSameLen,
+                                cardReward: 'Gemmer trækker 3 kort, beholder 1'
+                            });
+                        }
+                    });
+                    return;
+                }
+
+                // Special officiel Matching: Transit Line
+                if (qMeta.mode === 'line_match') {
+                    const stList = BUILTIN_GEO_DATA.station;
+                    const seekerSt = getNearestPOI(myCoords.lat, myCoords.lng, stList);
+                    const qText = `🧩 Matching: "Stopper vores nuværende toglinje (${seekerSt.line} ved ${seekerSt.name}) på din station?"`;
+
+                    runWithBroadcastSuspense({
+                        category: 'MATCHING',
+                        title: `TRANSIT LINE (${seekerSt.line})`,
+                        questionText: qText,
+                        cardReward: 'Træk 3 kort, behold 1',
+                        onComplete: async () => {
+                            const hiderSt = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, stList);
+                            const seekerLines = seekerSt.line.split('/').map(s => s.trim());
+                            const hiderLines = hiderSt.line.split('/').map(s => s.trim());
+                            const isMatch = seekerLines.some(l => hiderLines.includes(l));
+                            const headline = isMatch ? `✅ JA! SAMME TOGLINJE` : `❌ NEJ! ANDEN TOGLINJE`;
+                            const answerText = isMatch
+                                ? `✅ JA! Gemmerens station betjenes OGSÅ af ${seekerSt.line}!`
+                                : `❌ NEJ! Gemmerens station betjenes IKKE af ${seekerSt.line}!`;
+
+                            await upsertQuestionRecord({
+                                id: `q_${Date.now()}`,
+                                questionKey: `match_${qMeta.id}`,
+                                roomCode,
+                                category: 'MATCHING',
+                                questionText: qText,
+                                answerText,
+                                status: 'answered',
+                                autoAnswered: true,
+                                askedBy: playerName,
+                                createdAtMillis: Date.now()
+                            });
+                            await sendChatMessage(`🚨 SVAR PÅ MATCHING: ${answerText}`);
+                            triggerBroadcastReveal({
+                                category: 'MATCHING SVAR',
+                                headline,
+                                subtext: answerText,
+                                isPositive: isMatch,
+                                cardReward: 'Gemmer trækker 3 kort, beholder 1'
+                            });
+                        }
+                    });
+                    return;
+                }
+
+                // Special officiel Matching: Landmass (Sjælland vs. Amager)
+                if (qMeta.mode === 'landmass') {
+                    const amagerPoly = [
+                        { lat: 55.695, lng: 12.565 },
+                        { lat: 55.700, lng: 12.640 },
+                        { lat: 55.550, lng: 12.690 },
+                        { lat: 55.550, lng: 12.510 },
+                        { lat: 55.645, lng: 12.540 }
+                    ];
+                    const ring = amagerPoly.map(p => [p.lng, p.lat]);
+                    ring.push([amagerPoly[0].lng, amagerPoly[0].lat]);
+                    const amagerTurf = turf.polygon([ring]);
+                    const seekerOnAmager = turf.booleanPointInPolygon(turf.point([myCoords.lng, myCoords.lat]), amagerTurf);
+                    const seekerLand = seekerOnAmager ? 'Amager' : 'Sjælland';
+                    const qText = `🧩 Matching: "Er du på samme landmasse/ø som os (${seekerLand})?"`;
+
+                    runWithBroadcastSuspense({
+                        category: 'MATCHING',
+                        title: `LANDMASS (${seekerLand})`,
+                        questionText: qText,
+                        cardReward: 'Træk 3 kort, behold 1',
+                        onComplete: async () => {
+                            const hiderOnAmager = turf.booleanPointInPolygon(turf.point([activeHiderTarget.lng, activeHiderTarget.lat]), amagerTurf);
+                            const isSame = seekerOnAmager === hiderOnAmager;
+                            const hiderStayAmager = (seekerOnAmager && isSame) || (!seekerOnAmager && !isSame);
+                            const headline = isSame ? `✅ JA! PÅ ${seekerLand.toUpperCase()}` : `❌ NEJ! IKKE PÅ ${seekerLand.toUpperCase()}`;
+                            const answerText = isSame
+                                ? `✅ JA! Gemmeren er OGSÅ på ${seekerLand}!`
+                                : `❌ NEJ! Gemmeren er IKKE på ${seekerLand}!`;
+
+                            await saveMapObject({
+                                type: 'polygon',
+                                coords: amagerPoly,
+                                invert: hiderStayAmager,
+                                label: `Landmass (${seekerLand}): ${isSame ? 'JA' : 'NEJ'}`
+                            });
+
+                            await upsertQuestionRecord({
+                                id: `q_${Date.now()}`,
+                                questionKey: `match_${qMeta.id}`,
+                                roomCode,
+                                category: 'MATCHING',
+                                questionText: qText,
+                                answerText,
+                                status: 'answered',
+                                autoAnswered: true,
+                                askedBy: playerName,
+                                createdAtMillis: Date.now()
+                            });
+                            await sendChatMessage(`🚨 SVAR PÅ MATCHING: ${answerText}`);
+                            triggerBroadcastReveal({
+                                category: 'MATCHING SVAR',
+                                headline,
+                                subtext: answerText,
+                                isPositive: isSame,
+                                cardReward: 'Gemmer trækker 3 kort, beholder 1'
+                            });
+                        }
+                    });
+                    return;
+                }
+
+                // Standard Eksakt Kilometer-Voronoi Matching (Lufthavne, Kommuner, Bydele, Museer, Biografer, Hospitaler osv.)
+                const list = BUILTIN_GEO_DATA[qMeta.id] || BUILTIN_GEO_DATA.lufthavn;
+                const seekerNearest = getNearestPOI(myCoords.lat, myCoords.lng, list);
+                if (!seekerNearest) return;
+                const qText = `🧩 Matching: "Er din nærmeste ${qMeta.label} den samme som vores (${seekerNearest.name})?"`;
+
+                runWithBroadcastSuspense({
+                    category: 'MATCHING',
+                    title: `MATCHING: ${seekerNearest.name}`,
                     questionText: qText,
-                    answerText,
-                    status: 'answered',
-                    autoAnswered: true,
-                    askedBy: playerName,
-                    createdAtMillis: Date.now()
+                    cardReward: 'Træk 3 kort, behold 1',
+                    onComplete: async () => {
+                        const hiderNearest = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, list);
+                        const isSame = seekerNearest.index === hiderNearest.index;
+
+                        const headline = isSame ? `✅ JA! MATCH (${seekerNearest.name})` : `❌ NEJ! IKKE ${seekerNearest.name}`;
+                        const answerText = isSame
+                            ? `✅ JA (MATCH)! Gemmerens nærmeste ${qMeta.label} er OGSÅ ${seekerNearest.name}! (Alt uden for denne Voronoi-zone er nu farvet rødt)`
+                            : `❌ NEJ (IKKE MATCH)! Gemmerens nærmeste ${qMeta.label} er IKKE ${seekerNearest.name}! (Voronoi-zonen for ${seekerNearest.name} er nu skåret væk og farvet rød)`;
+
+                        await saveMapObject({
+                            type: 'voronoi_cell',
+                            points: list.map(p => ({ lat: p.lat, lng: p.lng, name: p.name })),
+                            refPoints: list.length <= 15 ? list : [seekerNearest],
+                            targetIdx: seekerNearest.index,
+                            invert: isSame,
+                            label: `Matching (${seekerNearest.name}): ${isSame ? 'JA' : 'NEJ'}`
+                        });
+
+                        await upsertQuestionRecord({
+                            id: `q_${Date.now()}`,
+                            questionKey: `match_${qMeta.id}`,
+                            roomCode,
+                            category: 'MATCHING',
+                            questionText: qText,
+                            answerText,
+                            status: 'answered',
+                            autoAnswered: true,
+                            askedBy: playerName,
+                            createdAtMillis: Date.now()
+                        });
+                        await sendChatMessage(`🚨 SVAR PÅ MATCHING: ${answerText}`);
+                        triggerBroadcastReveal({
+                            category: 'MATCHING SVAR',
+                            headline,
+                            subtext: answerText,
+                            isPositive: isSame,
+                            cardReward: 'Gemmer trækker 3 kort, beholder 1'
+                        });
+                    }
                 });
-                await sendChatMessage(`${qText} ➔ 🤖 AUTO-SVAR: ${answerText}`);
-                setActiveTool(null);
-                notify(answerText);
+            };
+
+            // 5. OFFICIAL TENTACLES QUESTION ("Within X miles of me, which Y are you nearest to?") — Cost: Draw 4, Keep 2
+            const handleAskAutoTentacles = () => {
+                if (!user || pendingTelemetry) return;
+                const tMeta = OFFICIAL_TENTACLE_QUESTIONS.find(t => t.id === qTentacleId) || OFFICIAL_TENTACLE_QUESTIONS[0];
+                const km = tMeta.radiusKm;
+                const kmLabel = `${km.toFixed(1)} km`;
+                const list = BUILTIN_GEO_DATA[tMeta.cat] || BUILTIN_GEO_DATA.museum;
+                const qText = `🐙 Tentacles: "${tMeta.label} — Hvilken ${tMeta.shortTitle} inden for ${kmLabel} af os er du tættest på?"`;
+
+                runWithBroadcastSuspense({
+                    category: 'TENTACLES',
+                    title: `TENTACLES (${tMeta.shortTitle})`,
+                    questionText: qText,
+                    cardReward: 'Træk 4 kort, behold 2',
+                    onComplete: async () => {
+                        const seekerPt = turf.point([myCoords.lng, myCoords.lat]);
+                        const hiderPt = turf.point([activeHiderTarget.lng, activeHiderTarget.lat]);
+                        const distToHider = turf.distance(seekerPt, hiderPt, { units: 'kilometers' });
+
+                        let candidates = list.filter(item =>
+                            turf.distance(seekerPt, turf.point([item.lng, item.lat]), { units: 'kilometers' }) <= km
+                        );
+                        if (candidates.length < 2) candidates = list;
+
+                        if (distToHider > km) {
+                            const headline = `❌ UDEN FOR RÆKKEVIDDE (> ${kmLabel})`;
+                            const answerText = `❌ UDEN FOR RÆKKEVIDDE! Gemmeren er slet ikke inden for ${kmLabel} af jer! (Cirklen på ${kmLabel} er nu farvet rød)`;
+                            await saveMapObject({
+                                type: 'radius',
+                                lat: myCoords.lat,
+                                lng: myCoords.lng,
+                                radiusKm: km,
+                                invert: false,
+                                label: `Tentacles (${kmLabel}): Uden for rækkevidde`
+                            });
+
+                            await upsertQuestionRecord({
+                                id: `q_${Date.now()}`,
+                                questionKey: `tentacle_${tMeta.id}`,
+                                roomCode,
+                                category: 'TENTACLES',
+                                questionText: qText,
+                                answerText,
+                                status: 'answered',
+                                autoAnswered: true,
+                                askedBy: playerName,
+                                createdAtMillis: Date.now()
+                            });
+                            await sendChatMessage(`🚨 SVAR PÅ TENTACLES: ${answerText}`);
+                            triggerBroadcastReveal({
+                                category: 'TENTACLES SVAR',
+                                headline,
+                                subtext: answerText,
+                                isPositive: false,
+                                cardReward: 'Gemmer trækker 4 kort, beholder 2'
+                            });
+                            return;
+                        }
+
+                        const winningPOI = getNearestPOI(activeHiderTarget.lat, activeHiderTarget.lng, candidates);
+                        const headline = `🐙 HIT: ${winningPOI.name.toUpperCase()}`;
+                        const answerText = `🐙 TENTACLES HIT! Inden for ${kmLabel} er gemmeren tættest på ${winningPOI.name}! (Kun denne tentakel-zone er nu åben)`;
+
+                        await saveMapObject({
+                            type: 'voronoi_cell',
+                            points: candidates.map(p => ({ lat: p.lat, lng: p.lng, name: p.name })),
+                            refPoints: candidates,
+                            targetIdx: winningPOI.index,
+                            invert: true,
+                            label: `Tentacles: Tættest på ${winningPOI.name}`
+                        });
+
+                        await upsertQuestionRecord({
+                            id: `q_${Date.now()}`,
+                            questionKey: `tentacle_${tMeta.id}`,
+                            roomCode,
+                            category: 'TENTACLES',
+                            questionText: qText,
+                            answerText,
+                            status: 'answered',
+                            autoAnswered: true,
+                            askedBy: playerName,
+                            createdAtMillis: Date.now()
+                        });
+                        await sendChatMessage(`🚨 SVAR PÅ TENTACLES: ${answerText}`);
+                        triggerBroadcastReveal({
+                            category: 'TENTACLES SVAR',
+                            headline,
+                            subtext: answerText,
+                            isPositive: true,
+                            cardReward: 'Gemmer trækker 4 kort, beholder 2'
+                        });
+                    }
+                });
             };
 
             // 6. SEND PHOTO / MANUAL QUESTION TO HIDER'S SCREEN
@@ -1836,10 +2613,13 @@
                 const qTitle = preset ? preset.title : '❓ Manuelt Spørgsmål';
                 if (!qText) return;
 
+                JetLagAudio.playQuestionSent();
+
                 const qObj = {
                     id: `q_${Date.now()}`,
+                    questionKey: preset?.id || `custom_${Date.now()}`,
                     roomCode,
-                    category: preset?.type === 'photo' ? 'FOTO' : 'MANUEL',
+                    category: preset?.type === 'text' ? 'MATCHING' : 'PHOTO (TRÆK 1 KORT)',
                     title: qTitle,
                     questionText: qText,
                     answerText: null,
@@ -1851,10 +2631,10 @@
                 };
 
                 await upsertQuestionRecord(qObj);
-                await sendChatMessage(`📨 SPØRGSMÅL SENDT TIL GEMMERE: ${qTitle} — "${qText}"`);
+                await sendChatMessage(`📸 FOTO-SPØRGSMÅL SENDT TIL GEMMERE: ${qTitle} — "${qText}" (Svartid: 10-20 min | Gemmer trækker 1 kort)`);
                 setCustomQuestionText("");
                 setActiveTool(null);
-                notify("Spørgsmål sendt direkte til Gemmernes skærm!");
+                notify("Officielt Foto-spørgsmål sendt direkte til Gemmernes skærm!");
             };
 
             // HIDER SUBMITS ANSWER / PHOTO TO PENDING QUESTION
@@ -2087,24 +2867,16 @@
             const teamAPlayers = players.filter(p => p.team === 'teamA');
             const teamBPlayers = players.filter(p => p.team === 'teamB');
 
-            // Compute live preview info for Seeker's Measuring & Matching tabs
+            // Compute live preview info for Seeker's Official Measuring & Matching tabs
             const myNearestMatchPOI = useMemo(() => {
-                const list = BUILTIN_GEO_DATA[qMatchCategory] || BUILTIN_GEO_DATA.kommune;
+                const list = BUILTIN_GEO_DATA[qMatchCategory] || BUILTIN_GEO_DATA.lufthavn;
                 return getNearestPOI(myCoords.lat, myCoords.lng, list);
             }, [myCoords, qMatchCategory]);
 
             const myMeasurePreviewKm = useMemo(() => {
-                if (qMeasureTarget === 'nord') return `${myCoords.lat.toFixed(4)}° N`;
-                if (qMeasureTarget === 'oest') return `${myCoords.lng.toFixed(4)}° Ø`;
-                const mapList = {
-                    vand: BUILTIN_GEO_DATA.vand,
-                    station: BUILTIN_GEO_DATA.station,
-                    metro: BUILTIN_GEO_DATA.metro,
-                    lufthavn: BUILTIN_GEO_DATA.lufthavn,
-                    kbh_h: [{ name: "København H", lat: 55.6726, lng: 12.5649 }]
-                };
-                const nearest = getNearestPOI(myCoords.lat, myCoords.lng, mapList[qMeasureTarget] || BUILTIN_GEO_DATA.vand);
-                return nearest ? `${nearest.distanceKm.toFixed(2)} km` : '0 km';
+                const list = BUILTIN_GEO_DATA[qMeasureTarget] || BUILTIN_GEO_DATA.lufthavn;
+                const nearest = getNearestPOI(myCoords.lat, myCoords.lng, list);
+                return nearest ? `${nearest.name} (${nearest.distanceKm.toFixed(2)} km)` : '0 km';
             }, [myCoords, qMeasureTarget]);
 
             return (
@@ -2198,6 +2970,20 @@
                         {/* Right: Map Theme, Zone 1-99 Hubs & GPS Simulator Toggle */}
                         <div className="pointer-events-auto flex items-center gap-1.5 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl p-1.5 shadow-xl">
                             <button
+                                onClick={() => {
+                                    const nextMuted = !soundMuted;
+                                    setSoundMuted(nextMuted);
+                                    JetLagAudio.muted = nextMuted;
+                                    if (!nextMuted) JetLagAudio.playIntroStinger();
+                                }}
+                                className={`px-2.5 py-1.5 rounded-xl font-display font-bold text-xs uppercase tracking-wider ${
+                                    !soundMuted ? 'bg-jl-green text-white' : 'bg-jl-dark text-jl-cream/50'
+                                }`}
+                                title="Slå Jet Lag lydeffekter til/fra"
+                            >
+                                {!soundMuted ? '🔊 Lyd' : '🔇 Lyd'}
+                            </button>
+                            <button
                                 onClick={() => setMapTheme(t => t === 'map-mint' ? 'map-clean' : t === 'map-clean' ? 'map-dark' : 'map-mint')}
                                 className="px-2.5 py-1.5 rounded-xl bg-jl-dark text-jl-cream hover:bg-slate-800 font-display font-bold text-xs uppercase tracking-wider"
                                 title="Skift kort-design"
@@ -2227,6 +3013,87 @@
                             </button>
                         </div>
                     </div>
+
+                    {/* 10–15 SEKUNDERS JET LAG TELEMETRI & SPÆNDINGS-OVERLAY */}
+                    {pendingTelemetry && (
+                        <div className="fixed inset-0 z-[700] bg-jl-dark/80 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-jl-navy border-4 border-jl-cream rounded-3xl max-w-md w-full p-6 text-center text-jl-cream shadow-2xl relative overflow-hidden">
+                                <div className="inline-block bg-jl-yellow text-jl-navy font-display font-black text-xs uppercase tracking-widest px-3 py-1 rounded jl-slanted-badge mb-3">
+                                    🛰️ JET LAG TELEMETRI • {pendingTelemetry.category}
+                                </div>
+
+                                <h3 className="font-display font-black text-3xl uppercase tracking-wide text-jl-cream mb-1">
+                                    {pendingTelemetry.title}
+                                </h3>
+                                <p className="text-xs text-jl-cream/80 mb-5 px-2">
+                                    {pendingTelemetry.questionText}
+                                </p>
+
+                                {/* Animated Radar Sweep Circle */}
+                                <div className="relative w-32 h-32 mx-auto mb-5 rounded-full border-4 border-jl-yellow/40 bg-jl-dark flex items-center justify-center overflow-hidden shadow-inner">
+                                    <div className="absolute inset-0 rounded-full border border-jl-yellow/20 scale-75" />
+                                    <div className="absolute inset-0 rounded-full border border-jl-yellow/20 scale-50" />
+                                    <div
+                                        className="absolute inset-0 jl-radar-sweep"
+                                        style={{
+                                            background: 'conic-gradient(from 0deg, transparent 70%, rgba(243, 178, 41, 0.55) 100%)'
+                                        }}
+                                    />
+                                    <span className="relative z-10 font-display font-black text-4xl text-jl-yellow">
+                                        {pendingTelemetry.secondsLeft}s
+                                    </span>
+                                </div>
+
+                                <div className="font-display font-extrabold text-base uppercase tracking-wider text-jl-green mb-3 animate-pulse">
+                                    {pendingTelemetry.stepText}
+                                </div>
+
+                                {/* Progress Bar */}
+                                <div className="w-full h-3 bg-jl-dark rounded-full overflow-hidden border border-jl-cream/20 mb-3">
+                                    <div
+                                        className="h-full bg-gradient-to-r from-jl-yellow via-jl-orange to-jl-red transition-all duration-700"
+                                        style={{
+                                            width: `${((pendingTelemetry.totalSeconds - pendingTelemetry.secondsLeft) / pendingTelemetry.totalSeconds) * 100}%`
+                                        }}
+                                    />
+                                </div>
+
+                                <div className="text-[11px] font-bold text-jl-cream/60 uppercase">
+                                    🃏 Gemmer-belønning: {pendingTelemetry.cardReward}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DRAMATISK JET LAG SVAR-REVEAL STAMP OVERLAY */}
+                    {revealOverlay && (
+                        <div
+                            onClick={() => setRevealOverlay(null)}
+                            className="fixed inset-x-0 top-24 z-[680] flex justify-center px-4 pointer-events-auto cursor-pointer"
+                        >
+                            <div className={`jl-stamp-reveal max-w-lg w-full rounded-3xl border-4 p-5 shadow-2xl text-center ${
+                                revealOverlay.isPositive
+                                    ? 'bg-jl-navy border-jl-green text-jl-cream'
+                                    : 'bg-jl-navy border-jl-red text-jl-cream'
+                            }`}>
+                                <div className="inline-block bg-jl-yellow text-jl-navy font-display font-black text-xs uppercase px-3 py-0.5 rounded mb-1">
+                                    🚨 OFFICIELT SVAR MODTAGET • {revealOverlay.category}
+                                </div>
+                                <div className={`font-display font-black text-3xl sm:text-4xl uppercase tracking-wider my-1 ${
+                                    revealOverlay.isPositive ? 'text-jl-green' : 'text-jl-red'
+                                }`}>
+                                    {revealOverlay.headline}
+                                </div>
+                                <p className="text-xs sm:text-sm font-bold text-jl-cream/90 mb-2">
+                                    {revealOverlay.subtext}
+                                </p>
+                                <div className="flex items-center justify-between text-[11px] text-jl-yellow font-display font-bold uppercase pt-2 border-t border-jl-cream/15">
+                                    <span>🃏 {revealOverlay.cardReward}</span>
+                                    <span>(Klik for at lukke)</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* HIDER EXCLUSIVE TOP-LEFT LIVE CHASER TRACKER WIDGET */}
                     {myRole === 'hider' && (
@@ -2285,35 +3152,34 @@
                         </div>
                     )}
 
-                    {}
                     {myRole === 'seeker' && activeTool === 'questions' && (
-                        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-[550] w-[95%] max-w-lg bg-jl-navy border-3 border-jl-cream rounded-3xl p-4 sm:p-5 shadow-2xl text-jl-cream max-h-[70vh] flex flex-col">
-                            <div className="flex justify-between items-center mb-3">
+                        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-[550] w-[95%] max-w-lg bg-jl-navy border-3 border-jl-cream rounded-3xl p-4 sm:p-5 shadow-2xl text-jl-cream max-h-[72vh] flex flex-col">
+                            <div className="flex justify-between items-center mb-2.5">
                                 <div>
                                     <span className="bg-jl-yellow text-jl-navy font-display font-black px-2 py-0.5 rounded text-[11px] uppercase">
-                                        🤖 AUTOMATISK GPS-ORAKEL & SPØRGSMÅLS-MENU
+                                        📘 OFFICIEL JET LAG HIDE + SEEK REGELBOG (80 SPØRGSMÅL)
                                     </span>
                                     <h3 className="font-display font-black text-2xl uppercase tracking-wide mt-0.5 text-jl-cream">
-                                        STIL SPØRGSMÅL TIL GEMMERNE
+                                        VÆLG OFFICIELT SPØRGSMÅL
                                     </h3>
                                 </div>
                                 <button onClick={() => setActiveTool(null)} className="text-jl-cream/60 hover:text-white font-bold text-xl px-2">✕</button>
                             </div>
 
-                            {/* Category Selector Tabs */}
+                            {/* Category Selector Tabs with Official Card Draw Costs */}
                             <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-3 bg-jl-dark p-1.5 rounded-2xl border border-jl-cream/15">
                                 {[
-                                    { id: 'radar', icon: '🎯', label: 'Radar' },
-                                    { id: 'thermometer', icon: '🌡️', label: 'Termo' },
-                                    { id: 'measuring', icon: '📏', label: 'Measuring' },
-                                    { id: 'matching', icon: '🧩', label: 'Matching' },
-                                    { id: 'tentacles', icon: '🐙', label: 'Tentacles' },
-                                    { id: 'photos', icon: '📸', label: 'Foto/Andet' }
+                                    { id: 'matching', icon: '🧩', label: 'Matching', cost: 'Træk 3, Beh. 1' },
+                                    { id: 'measuring', icon: '📏', label: 'Measuring', cost: 'Træk 3, Beh. 1' },
+                                    { id: 'radar', icon: '🎯', label: 'Radars', cost: 'Træk 2, Beh. 1' },
+                                    { id: 'thermometer', icon: '🌡️', label: 'Thermo', cost: 'Træk 2, Beh. 1' },
+                                    { id: 'tentacles', icon: '🐙', label: 'Tentacles', cost: 'Træk 4, Beh. 2' },
+                                    { id: 'photos', icon: '📸', label: 'Photos', cost: 'Træk 1, Beh. 1' }
                                 ].map(tab => (
                                     <button
                                         key={tab.id}
                                         onClick={() => setQuestionTab(tab.id)}
-                                        className={`py-2 px-1 rounded-xl font-display font-black uppercase text-xs flex flex-col items-center transition-all ${
+                                        className={`py-1.5 px-1 rounded-xl font-display font-black uppercase text-xs flex flex-col items-center transition-all ${
                                             questionTab === tab.id
                                                 ? 'bg-jl-yellow text-jl-navy shadow scale-[1.03]'
                                                 : 'text-jl-cream/70 hover:text-white'
@@ -2321,65 +3187,83 @@
                                     >
                                         <span className="text-base leading-none mb-0.5">{tab.icon}</span>
                                         <span>{tab.label}</span>
+                                        <span className="text-[8px] opacity-75 font-sans font-bold">{tab.cost}</span>
                                     </button>
                                 ))}
                             </div>
 
                             <div className="flex-1 overflow-y-auto pr-1 no-scrollbar space-y-3">
-                                {/* TAB 1: AUTO RADAR */}
+                                {/* TAB 1: OFFICIAL RADARS (10 SPØRGSMÅL) */}
                                 {questionTab === 'radar' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-jl-yellow uppercase">
-                                            🎯 RADAR: "Er I inden for X km af vores position?"
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <div className="font-display font-black text-lg text-jl-yellow uppercase">
+                                                    🎯 RADAR: "Are you within ___ of me?"
+                                                </div>
+                                                <p className="text-[11px] text-jl-cream/75">
+                                                    Officiel pris: Gemmer trækker 2 kort, beholder 1 • 12 sek. telemetri-ventetid
+                                                </p>
+                                            </div>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Appen tjekker automatisk Gemmernes GPS mod din nuværende position, svarer JA/NEJ og farver det udelukkede område rødt!
-                                        </p>
-                                        <div className="grid grid-cols-4 gap-2">
-                                            {[0.5, 1, 2, 5, 10, 15, 25, 50].map(km => (
-                                                <button
-                                                    key={km}
-                                                    onClick={() => setQRadarKm(km)}
-                                                    className={`py-2 rounded-xl font-display font-black text-sm uppercase border ${
-                                                        Number(qRadarKm) === km
-                                                            ? 'bg-jl-yellow text-jl-navy border-white'
-                                                            : 'bg-jl-navy text-jl-cream border-jl-cream/20'
-                                                    }`}
-                                                >
-                                                    {km} km
-                                                </button>
-                                            ))}
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {OFFICIAL_RADAR_DISTANCES.map(r => {
+                                                const used = isQuestionUsed(`radar_${r.km}`);
+                                                return (
+                                                    <button
+                                                        key={r.km}
+                                                        onClick={() => setQRadarKm(r.km)}
+                                                        className={`p-2 rounded-xl font-display font-black text-xs uppercase border text-center relative ${
+                                                            Number(qRadarKm) === r.km
+                                                                ? 'bg-jl-yellow text-jl-navy border-white'
+                                                                : 'bg-jl-navy text-jl-cream border-jl-cream/20'
+                                                        }`}
+                                                    >
+                                                        <div>{r.label}</div>
+                                                        {used && <span className="text-[9px] text-jl-red font-bold block">✓ BRUGT</span>}
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                         <div className="flex items-center gap-3 pt-1">
-                                            <span className="text-xs font-bold uppercase text-jl-cream/70">Valgfri km:</span>
+                                            <span className="text-xs font-bold uppercase text-jl-cream/70">10. Choose (Valgfri km):</span>
                                             <input
                                                 type="number"
-                                                step="0.5"
+                                                step="0.2"
                                                 min="0.2"
-                                                max="100"
+                                                max="160"
                                                 value={qRadarKm}
                                                 onChange={e => setQRadarKm(e.target.value)}
-                                                className="w-24 bg-jl-navy border border-jl-cream/30 rounded-xl px-3 py-1.5 font-bold text-center"
+                                                className="w-24 bg-jl-navy border border-jl-cream/30 rounded-xl px-3 py-1.5 font-bold text-center text-sm"
                                             />
                                         </div>
                                         <button
                                             onClick={() => handleAskAutoRadar(qRadarKm)}
                                             className="w-full bg-jl-green hover:bg-emerald-500 text-white font-display font-black text-lg uppercase tracking-wider py-3 rounded-xl shadow-lg"
                                         >
-                                            🤖 SPØRG & FARV KORTET AUTOMATISK ({qRadarKm} KM)
+                                            📡 SEND RADAR-SPØRGSMÅL ({Number(qRadarKm).toFixed(2)} KM)
                                         </button>
                                     </div>
                                 )}
 
-                                {/* TAB 2: AUTO THERMOMETER */}
+                                {/* TAB 2: OFFICIAL THERMOMETERS (4 SPØRGSMÅL) */}
                                 {questionTab === 'thermometer' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-jl-green uppercase">
-                                            🌡️ TERMOMETER: "Er vi kommet Varmere eller Koldere?"
+                                        <div>
+                                            <div className="font-display font-black text-lg text-jl-green uppercase">
+                                                🌡️ THERMOMETER: "After traveling ___, am I hotter or colder?"
+                                            </div>
+                                            <p className="text-[11px] text-jl-cream/75">
+                                                Officiel pris: Gemmer trækker 2 kort, beholder 1 • Eksakt vinkelret km-skæring!
+                                            </p>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Klik 2 punkter på kortet (Start A og Slut B) – eller sæt dem med din GPS. Appen udregner selv om I er kommet tættere på Gemmerne og skærer kortet over!
-                                        </p>
+                                        <div className="grid grid-cols-2 gap-1.5">
+                                            {OFFICIAL_THERMOMETER_DISTANCES.map(t => (
+                                                <div key={t.km} className="bg-jl-navy/70 border border-jl-cream/15 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-jl-cream/90">
+                                                    📏 {t.label}
+                                                </div>
+                                            ))}
+                                        </div>
                                         <div className="grid grid-cols-2 gap-2">
                                             <button
                                                 onClick={() => setThermoA({ lat: myCoords.lat, lng: myCoords.lng })}
@@ -2400,10 +3284,10 @@
                                         </div>
                                         <div className="text-xs text-jl-yellow font-bold text-center">
                                             {!thermoA
-                                                ? '👆 Klik på kortet (eller knappen) for at vælge START (A)'
+                                                ? '👆 Klik på kortet (eller knappen) for at sætte START (A)'
                                                 : !thermoB
-                                                ? '👆 Klik nu på kortet for at vælge SLUT (B)'
-                                                : `✓ A og B er valgt! Afstand: ${turf.distance(turf.point([thermoA.lng, thermoA.lat]), turf.point([thermoB.lng, thermoB.lat]), { units: 'kilometers' }).toFixed(2)} km`}
+                                                ? '👆 Klik nu på kortet for at sætte SLUT (B)'
+                                                : `✓ A og B valgt! Rejst afstand: ${turf.distance(turf.point([thermoA.lng, thermoA.lat]), turf.point([thermoB.lng, thermoB.lat]), { units: 'kilometers' }).toFixed(2)} km`}
                                         </div>
                                         <div className="flex gap-2">
                                             <button
@@ -2417,86 +3301,84 @@
                                                 disabled={!thermoA || !thermoB}
                                                 className="flex-1 bg-jl-green hover:bg-emerald-500 disabled:opacity-40 text-white font-display font-black text-lg uppercase tracking-wider py-3 rounded-xl shadow-lg"
                                             >
-                                                🤖 UDREGN VARMERE/KOLDERE AUTOMATISK
+                                                📡 SEND TERMOMETER-SPØRGSMÅL
                                             </button>
                                         </div>
                                     </div>
                                 )}
 
-                                {/* TAB 3: AUTO MEASURING */}
+                                {/* TAB 3: OFFICIAL MEASURING (20 SPØRGSMÅL) */}
                                 {questionTab === 'measuring' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-jl-orange uppercase">
-                                            📏 MEASURING: "Er I tættere på eller længere fra [X] end os?"
+                                        <div>
+                                            <div className="font-display font-black text-lg text-jl-orange uppercase">
+                                                📏 MEASURING: "Compared to me, are you closer to or further from ___?"
+                                            </div>
+                                            <p className="text-[11px] text-jl-cream/75">
+                                                Officiel pris: Gemmer trækker 3 kort, beholder 1 • Alle 20 originale spørgsmål:
+                                            </p>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Appen sammenligner jeres afstand med Gemmernes afstand og farver automatisk kystlinjer, stationer eller breddegrader røde!
-                                        </p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[
-                                                { id: 'vand', label: '🌊 Havet / Kysten / Vand' },
-                                                { id: 'station', label: '🚆 Nærmeste Togstation' },
-                                                { id: 'metro', label: '🚇 Nærmeste Metrostation' },
-                                                { id: 'lufthavn', label: '✈️ Nærmeste Lufthavn' },
-                                                { id: 'kbh_h', label: '🏛️ København H' },
-                                                { id: 'nord', label: '🧭 Nordligere / Sydligere' },
-                                                { id: 'oest', label: '🧭 Østligere / Vestligere' }
-                                            ].map(item => (
-                                                <button
-                                                    key={item.id}
-                                                    onClick={() => setQMeasureTarget(item.id)}
-                                                    className={`p-2.5 rounded-xl border text-left font-display font-bold text-xs uppercase ${
-                                                        qMeasureTarget === item.id
-                                                            ? 'bg-jl-orange text-white border-white'
-                                                            : 'bg-jl-navy text-jl-cream/80 border-jl-cream/20'
-                                                    }`}
-                                                >
-                                                    {item.label}
-                                                </button>
-                                            ))}
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
+                                            {OFFICIAL_MEASURING_QUESTIONS.map(item => {
+                                                const used = isQuestionUsed(`measure_${item.id}`);
+                                                return (
+                                                    <button
+                                                        key={item.id}
+                                                        onClick={() => setQMeasureTarget(item.id)}
+                                                        className={`p-2 rounded-xl border text-left font-display font-bold text-xs uppercase flex items-center justify-between ${
+                                                            qMeasureTarget === item.id
+                                                                ? 'bg-jl-orange text-white border-white'
+                                                                : 'bg-jl-navy text-jl-cream/85 border-jl-cream/20'
+                                                        }`}
+                                                    >
+                                                        <span className="truncate">{item.label}</span>
+                                                        {used && <span className="text-[9px] bg-black/40 px-1.5 py-0.5 rounded ml-1 shrink-0">✓ BRUGT</span>}
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                         <div className="bg-jl-navy/80 px-3 py-2 rounded-xl border border-jl-cream/15 flex justify-between items-center text-xs">
-                                            <span className="text-jl-cream/70">Din nuværende måling:</span>
-                                            <span className="font-display font-black text-base text-jl-yellow">{myMeasurePreviewKm}</span>
+                                            <span className="text-jl-cream/70">Din nærmeste & afstand:</span>
+                                            <span className="font-display font-black text-sm text-jl-yellow">{myMeasurePreviewKm}</span>
                                         </div>
                                         <button
                                             onClick={handleAskAutoMeasuring}
                                             className="w-full bg-jl-orange hover:bg-amber-600 text-white font-display font-black text-lg uppercase tracking-wider py-3 rounded-xl shadow-lg"
                                         >
-                                            🤖 MÅL & FARV KORTET AUTOMATISK
+                                            📡 SEND MEASURING-SPØRGSMÅL
                                         </button>
                                     </div>
                                 )}
 
-                                {/* TAB 4: AUTO MATCHING */}
+                                {/* TAB 4: OFFICIAL MATCHING (20 SPØRGSMÅL) */}
                                 {questionTab === 'matching' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-jl-yellow uppercase">
-                                            🧩 MATCHING: "Er jeres nærmeste [X] den samme som vores?"
+                                        <div>
+                                            <div className="font-display font-black text-lg text-jl-yellow uppercase">
+                                                🧩 MATCHING: "Is your nearest ___ the same as my ___?"
+                                            </div>
+                                            <p className="text-[11px] text-jl-cream/75">
+                                                Officiel pris: Gemmer trækker 3 kort, beholder 1 • Eksakt Kilometer-Voronoi skæring:
+                                            </p>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Tegner automatisk den præcise Voronoi-grænse omkring din nærmeste station/kommune og farver den rød (ved NEJ) eller farver resten af Sjælland rød (ved JA)!
-                                        </p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[
-                                                { id: 'kommune', label: '🏙️ Bydel / Kommune (Zone 1-99)' },
-                                                { id: 'station', label: '🚆 Tog- / S-togsstation' },
-                                                { id: 'metro', label: '🚇 Metrostation' },
-                                                { id: 'hospital', label: '🏥 Hospital / Sygehus' },
-                                                { id: 'lufthavn', label: '✈️ Lufthavn' }
-                                            ].map(item => (
-                                                <button
-                                                    key={item.id}
-                                                    onClick={() => setQMatchCategory(item.id)}
-                                                    className={`p-2.5 rounded-xl border text-left font-display font-bold text-xs uppercase ${
-                                                        qMatchCategory === item.id
-                                                            ? 'bg-jl-yellow text-jl-navy border-white'
-                                                            : 'bg-jl-navy text-jl-cream/80 border-jl-cream/20'
-                                                    }`}
-                                                >
-                                                    {item.label}
-                                                </button>
-                                            ))}
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
+                                            {OFFICIAL_MATCHING_QUESTIONS.map(item => {
+                                                const used = isQuestionUsed(`match_${item.id}`);
+                                                return (
+                                                    <button
+                                                        key={item.id}
+                                                        onClick={() => setQMatchCategory(item.id)}
+                                                        className={`p-2 rounded-xl border text-left font-display font-bold text-xs uppercase flex items-center justify-between ${
+                                                            qMatchCategory === item.id
+                                                                ? 'bg-jl-yellow text-jl-navy border-white'
+                                                                : 'bg-jl-navy text-jl-cream/85 border-jl-cream/20'
+                                                        }`}
+                                                    >
+                                                        <span className="truncate">{item.label}</span>
+                                                        {used && <span className="text-[9px] bg-black/30 text-white px-1.5 py-0.5 rounded ml-1 shrink-0">✓ BRUGT</span>}
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                         {myNearestMatchPOI && (
                                             <div className="bg-jl-navy/80 px-3 py-2 rounded-xl border border-jl-cream/15 flex justify-between items-center text-xs">
@@ -2510,89 +3392,83 @@
                                             onClick={handleAskAutoMatching}
                                             className="w-full bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-lg uppercase tracking-wider py-3 rounded-xl shadow-lg"
                                         >
-                                            🤖 TJEK MATCH & TEGN VORONOI-ZONE
+                                            📡 SEND MATCHING-SPØRGSMÅL
                                         </button>
                                     </div>
                                 )}
 
-                                {/* TAB 5: AUTO TENTACLES */}
+                                {/* TAB 5: OFFICIAL TENTACLES (8 SPØRGSMÅL) */}
                                 {questionTab === 'tentacles' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-purple-400 uppercase">
-                                            🐙 TENTACLES: "Hvilket knudepunkt inden for X km er I tættest på?"
+                                        <div>
+                                            <div className="font-display font-black text-lg text-purple-400 uppercase">
+                                                🐙 TENTACLES: "Within ___ of me, which ___ are you nearest to?"
+                                            </div>
+                                            <p className="text-[11px] text-jl-cream/75">
+                                                Officiel pris: Gemmer trækker 4 kort, beholder 2 • De originale 1 Mile & 15 Miles Tentacles:
+                                            </p>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Finder alle muligheder inden for radiussen og afslører præcis hvilken "tentakel" Gemmerne er tættest på (og udelukker alle andre)!
-                                        </p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[
-                                                { id: 'station', label: '🚆 Togstationer' },
-                                                { id: 'metro', label: '🚇 Metrostationer' },
-                                                { id: 'kommune', label: '🏙️ Bydele / Kommuner' },
-                                                { id: 'hospital', label: '🏥 Hospitaler' }
-                                            ].map(item => (
-                                                <button
-                                                    key={item.id}
-                                                    onClick={() => setQTentacleCategory(item.id)}
-                                                    className={`p-2.5 rounded-xl border text-left font-display font-bold text-xs uppercase ${
-                                                        qTentacleCategory === item.id
-                                                            ? 'bg-purple-600 text-white border-white'
-                                                            : 'bg-jl-navy text-jl-cream/80 border-jl-cream/20'
-                                                    }`}
-                                                >
-                                                    {item.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <div className="flex items-center justify-between bg-jl-navy px-3 py-2 rounded-xl border border-jl-cream/20">
-                                            <span className="text-xs font-bold uppercase">Tentacles Rækkevidde:</span>
-                                            <div className="flex gap-1.5">
-                                                {[5, 10, 15, 25, 40].map(r => (
+                                        <div className="grid grid-cols-1 gap-1.5 max-h-52 overflow-y-auto pr-1 no-scrollbar">
+                                            {OFFICIAL_TENTACLE_QUESTIONS.map(item => {
+                                                const used = isQuestionUsed(`tentacle_${item.id}`);
+                                                return (
                                                     <button
-                                                        key={r}
-                                                        onClick={() => setQTentacleRadiusKm(r)}
-                                                        className={`px-2.5 py-1 rounded-lg font-display font-black text-xs ${
-                                                            Number(qTentacleRadiusKm) === r ? 'bg-jl-yellow text-jl-navy' : 'bg-jl-dark text-jl-cream'
+                                                        key={item.id}
+                                                        onClick={() => setQTentacleId(item.id)}
+                                                        className={`p-2.5 rounded-xl border text-left font-display font-bold text-xs uppercase flex items-center justify-between ${
+                                                            qTentacleId === item.id
+                                                                ? 'bg-purple-600 text-white border-white'
+                                                                : 'bg-jl-navy text-jl-cream/85 border-jl-cream/20'
                                                         }`}
                                                     >
-                                                        {r} km
+                                                        <span>{item.label}</span>
+                                                        {used && <span className="text-[9px] bg-black/40 px-1.5 py-0.5 rounded ml-1">✓ BRUGT</span>}
                                                     </button>
-                                                ))}
-                                            </div>
+                                                );
+                                            })}
                                         </div>
                                         <button
                                             onClick={handleAskAutoTentacles}
                                             className="w-full bg-purple-600 hover:bg-purple-500 text-white font-display font-black text-lg uppercase tracking-wider py-3 rounded-xl shadow-lg"
                                         >
-                                            🤖 SEND TENTACLES & FIND GEMMER-ZONE
+                                            📡 SEND TENTACLES-SPØRGSMÅL
                                         </button>
                                     </div>
                                 )}
 
-                                {/* TAB 6: PHOTOS & MANUAL QUESTIONS (Sent directly to Hider's Inbox!) */}
+                                {/* TAB 6: OFFICIAL PHOTOS (18 SPØRGSMÅL FRA REGELBOGEN) */}
                                 {questionTab === 'photos' && (
                                     <div className="bg-jl-dark p-4 rounded-2xl border border-jl-cream/15 space-y-3">
-                                        <div className="font-display font-black text-lg text-jl-red uppercase">
-                                            📸 FOTO-OPGAVER & MANUELLE SPØRGSMÅL
+                                        <div>
+                                            <div className="font-display font-black text-lg text-jl-red uppercase">
+                                                📸 OFFICIAL PHOTO QUESTIONS (18 SPØRGSMÅL)
+                                            </div>
+                                            <p className="text-[11px] text-jl-cream/75">
+                                                Officiel pris: Gemmer trækker 1 kort • Svartid: 10–20 min • Sendes direkte til Gemmerens skærm:
+                                            </p>
                                         </div>
-                                        <p className="text-xs text-jl-cream/80">
-                                            Disse spørgsmål sendes direkte til Gemmernes skærm, så de kan tage et billede eller skrive svaret tilbage til jer i appen:
-                                        </p>
-                                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
-                                            {MANUAL_PHOTO_QUESTIONS.map(pq => (
-                                                <div key={pq.id} className="flex items-center justify-between bg-jl-navy p-2.5 rounded-xl border border-jl-cream/15 gap-2">
-                                                    <div>
-                                                        <div className="font-display font-black text-sm text-jl-yellow uppercase">{pq.title}</div>
-                                                        <div className="text-[11px] text-jl-cream/80 leading-snug">{pq.text}</div>
+                                        <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 no-scrollbar">
+                                            {OFFICIAL_PHOTO_QUESTIONS.map(pq => {
+                                                const used = isQuestionUsed(pq.id);
+                                                return (
+                                                    <div key={pq.id} className="flex items-center justify-between bg-jl-navy p-2.5 rounded-xl border border-jl-cream/15 gap-2">
+                                                        <div>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="font-display font-black text-sm text-jl-yellow uppercase">{pq.title}</span>
+                                                                <span className="text-[9px] bg-jl-dark px-1.5 py-0.5 rounded text-jl-cream/60 font-bold uppercase">{pq.size}</span>
+                                                                {used && <span className="text-[9px] bg-jl-red/30 text-jl-red px-1.5 py-0.5 rounded font-bold">✓ BRUGT</span>}
+                                                            </div>
+                                                            <div className="text-[11px] text-jl-cream/80 leading-snug mt-0.5">{pq.text}</div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleSendManualOrPhotoQuestion(pq)}
+                                                            className="shrink-0 bg-jl-red hover:bg-red-600 text-white font-display font-black text-xs uppercase px-3 py-2 rounded-xl shadow"
+                                                        >
+                                                            Send →
+                                                        </button>
                                                     </div>
-                                                    <button
-                                                        onClick={() => handleSendManualOrPhotoQuestion(pq)}
-                                                        className="shrink-0 bg-jl-red hover:bg-red-600 text-white font-display font-black text-xs uppercase px-3 py-2 rounded-xl shadow"
-                                                    >
-                                                        Send →
-                                                    </button>
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
 
                                         {/* Custom question input */}
@@ -2601,7 +3477,7 @@
                                                 type="text"
                                                 value={customQuestionText}
                                                 onChange={e => setCustomQuestionText(e.target.value)}
-                                                placeholder="Eller skriv jeres eget spørgsmål til Gemmerne..."
+                                                placeholder="Eller skriv en præcisering / spørgsmål til Gemmerne..."
                                                 className="flex-1 bg-jl-navy border border-jl-cream/30 rounded-xl px-3 py-2 text-xs text-jl-cream placeholder-jl-cream/40"
                                             />
                                             <button
