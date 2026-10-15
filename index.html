@@ -58,6 +58,14 @@
             background-color: #1B2634;
             font-family: 'Plus Jakarta Sans', sans-serif;
             user-select: none;
+            overscroll-behavior: none;
+        }
+
+        .safe-top {
+            padding-top: max(0.5rem, env(safe-area-inset-top));
+        }
+        .safe-bottom {
+            padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
         }
 
         /* Jet Lag Broadcast Map Styling (Matches Image 2 Mint/Clean Aesthetic) */
@@ -79,27 +87,43 @@
             filter: invert(100%) hue-rotate(185deg) brightness(92%) contrast(92%);
         }
 
+        /* Hide default Leaflet zoom on mobile to save screen space; placed nicely on desktop */
+        @media (max-width: 640px) {
+            .leaflet-top.leaflet-right {
+                top: 76px !important;
+                right: 6px !important;
+            }
+        }
+
         /* Iconic Jet Lag Slanted Tag */
         .jl-slanted-badge {
             transform: rotate(-4deg);
             box-shadow: 0 4px 0 rgba(18, 26, 36, 0.45);
         }
         
-        /* Jet Lag Hexagon Button (Matches Image 3) */
+        /* Jet Lag Hexagon Button (Responsive for Mobile & Desktop) */
         .jl-hex-outer {
-            width: 62px;
-            height: 68px;
+            width: 52px;
+            height: 58px;
             clip-path: polygon(50% 0%, 96% 25%, 96% 75%, 50% 100%, 4% 75%, 4% 25%);
             background-color: #ECECE4;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 4px;
+            padding: 3.5px;
             transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
             cursor: pointer;
+            touch-action: manipulation;
+        }
+        @media (min-width: 640px) {
+            .jl-hex-outer {
+                width: 62px;
+                height: 68px;
+                padding: 4px;
+            }
         }
         .jl-hex-outer:hover { transform: translateY(-4px) scale(1.05); }
-        .jl-hex-outer:active { transform: translateY(1px) scale(0.96); }
+        .jl-hex-outer:active { transform: translateY(1px) scale(0.95); }
         .jl-hex-outer.active-hex {
             background-color: #F3B229;
             transform: translateY(-6px) scale(1.08);
@@ -342,25 +366,161 @@
 
         // In-memory BroadcastChannel til lokal test i Chrome (mellem faner) hvis Firebase ikke er sat op endnu
         const localChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('jetlag_local_room_sync') : null;
+        // Lokal in-memory liste over aktive rum til lokal fanebaseret test
+        const localActiveRoomsRegistry = new Map();
 
         const { useState, useEffect, useRef, useMemo } = React;
 
         // ============================================================================
-        // JET LAG BROADCAST SOUND ENGINE (Web Audio API — Ingen eksterne lydfiler krævet)
+        // JET LAG STUDIO SOUND & PROCEDURAL MUSIC ENGINE (Web Audio API)
         // ============================================================================
         const JetLagAudio = {
             ctx: null,
+            masterGain: null,
+            compressor: null,
+            delayNode: null,
+            delayFeedback: null,
             muted: false,
+            musicPlaying: false,
+            musicTimer: null,
+            musicStep: 0,
+
             init() {
                 if (!this.ctx && typeof window !== 'undefined') {
                     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                    if (AudioCtx) this.ctx = new AudioCtx();
+                    if (AudioCtx) {
+                        this.ctx = new AudioCtx();
+                        this.compressor = this.ctx.createDynamicsCompressor();
+                        this.compressor.threshold.setValueAtTime(-18, this.ctx.currentTime);
+                        this.compressor.knee.setValueAtTime(12, this.ctx.currentTime);
+                        this.compressor.ratio.setValueAtTime(4, this.ctx.currentTime);
+                        this.compressor.attack.setValueAtTime(0.005, this.ctx.currentTime);
+                        this.compressor.release.setValueAtTime(0.18, this.ctx.currentTime);
+
+                        this.masterGain = this.ctx.createGain();
+                        this.masterGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
+
+                        // Stereo Broadcast Delay / Slapback Echo for atmospheric depth
+                        this.delayNode = this.ctx.createDelay(1.0);
+                        this.delayNode.delayTime.setValueAtTime(0.24, this.ctx.currentTime);
+                        this.delayFeedback = this.ctx.createGain();
+                        this.delayFeedback.gain.setValueAtTime(0.26, this.ctx.currentTime);
+                        const delayFilter = this.ctx.createBiquadFilter();
+                        delayFilter.type = 'lowpass';
+                        delayFilter.frequency.setValueAtTime(1800, this.ctx.currentTime);
+
+                        this.delayNode.connect(delayFilter);
+                        delayFilter.connect(this.delayFeedback);
+                        this.delayFeedback.connect(this.delayNode);
+                        this.delayNode.connect(this.compressor);
+
+                        this.compressor.connect(this.masterGain);
+                        this.masterGain.connect(this.ctx.destination);
+                    }
                 }
                 if (this.ctx && this.ctx.state === 'suspended') {
                     this.ctx.resume().catch(() => {});
                 }
             },
-            playTone(freq, type = 'sine', duration = 0.18, delay = 0, vol = 0.16, slideTo = null) {
+
+            // Rich Detuned Analog Synth / Brass Voice with Lowpass Filter Envelope
+            playSynthVoice(freq, {
+                type = 'sawtooth',
+                detuneCents = 8,
+                duration = 0.35,
+                delay = 0,
+                vol = 0.14,
+                attack = 0.015,
+                filterStart = 600,
+                filterPeak = 2800,
+                slideTo = null,
+                sendEcho = true
+            } = {}) {
+                if (this.muted) return;
+                try {
+                    this.init();
+                    if (!this.ctx) return;
+                    const t0 = this.ctx.currentTime + delay;
+
+                    const osc1 = this.ctx.createOscillator();
+                    const osc2 = this.ctx.createOscillator();
+                    const filter = this.ctx.createBiquadFilter();
+                    const gain = this.ctx.createGain();
+
+                    osc1.type = type;
+                    osc2.type = type === 'sawtooth' ? 'triangle' : type;
+                    osc1.frequency.setValueAtTime(freq, t0);
+                    osc2.frequency.setValueAtTime(freq, t0);
+                    osc1.detune.setValueAtTime(-detuneCents, t0);
+                    osc2.detune.setValueAtTime(detuneCents, t0);
+
+                    if (slideTo) {
+                        osc1.frequency.exponentialRampToValueAtTime(slideTo, t0 + duration);
+                        osc2.frequency.exponentialRampToValueAtTime(slideTo, t0 + duration);
+                    }
+
+                    filter.type = 'lowpass';
+                    filter.Q.setValueAtTime(2.5, t0);
+                    filter.frequency.setValueAtTime(filterStart, t0);
+                    filter.frequency.exponentialRampToValueAtTime(filterPeak, t0 + attack * 1.5);
+                    filter.frequency.exponentialRampToValueAtTime(Math.max(250, filterStart * 0.8), t0 + duration);
+
+                    gain.gain.setValueAtTime(0.0001, t0);
+                    gain.gain.linearRampToValueAtTime(vol, t0 + attack);
+                    gain.gain.exponentialRampToValueAtTime(0.0005, t0 + duration);
+
+                    osc1.connect(filter);
+                    osc2.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(this.compressor);
+                    if (sendEcho && this.delayNode) {
+                        const echoSend = this.ctx.createGain();
+                        echoSend.gain.setValueAtTime(0.32, t0);
+                        gain.connect(echoSend);
+                        echoSend.connect(this.delayNode);
+                    }
+
+                    osc1.start(t0);
+                    osc2.start(t0);
+                    osc1.stop(t0 + duration + 0.04);
+                    osc2.stop(t0 + duration + 0.04);
+                } catch (e) {}
+            },
+
+            // Crisp Percussion / Hi-Hat / Snare Tick
+            playNoisePerc(duration = 0.06, delay = 0, vol = 0.08, bandFreq = 4500) {
+                if (this.muted) return;
+                try {
+                    this.init();
+                    if (!this.ctx) return;
+                    const t0 = this.ctx.currentTime + delay;
+                    const bufferSize = Math.floor(this.ctx.sampleRate * duration);
+                    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) {
+                        data[i] = Math.random() * 2 - 1;
+                    }
+                    const noise = this.ctx.createBufferSource();
+                    noise.buffer = buffer;
+
+                    const filter = this.ctx.createBiquadFilter();
+                    filter.type = 'bandpass';
+                    filter.frequency.setValueAtTime(bandFreq, t0);
+                    filter.Q.setValueAtTime(1.8, t0);
+
+                    const gain = this.ctx.createGain();
+                    gain.gain.setValueAtTime(vol, t0);
+                    gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+
+                    noise.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(this.compressor);
+                    noise.start(t0);
+                } catch (e) {}
+            },
+
+            // Deep Sub-Bass Impact Punch
+            playSubDrop(delay = 0, startFreq = 110, endFreq = 36, duration = 0.45, vol = 0.35) {
                 if (this.muted) return;
                 try {
                     this.init();
@@ -368,114 +528,687 @@
                     const t0 = this.ctx.currentTime + delay;
                     const osc = this.ctx.createOscillator();
                     const gain = this.ctx.createGain();
-                    osc.type = type;
-                    osc.frequency.setValueAtTime(freq, t0);
-                    if (slideTo) {
-                        osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + duration);
-                    }
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(startFreq, t0);
+                    osc.frequency.exponentialRampToValueAtTime(endFreq, t0 + duration);
                     gain.gain.setValueAtTime(0.001, t0);
-                    gain.gain.linearRampToValueAtTime(vol, t0 + 0.02);
-                    gain.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
+                    gain.gain.linearRampToValueAtTime(vol, t0 + 0.015);
+                    gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
                     osc.connect(gain);
-                    gain.connect(this.ctx.destination);
+                    gain.connect(this.compressor);
                     osc.start(t0);
-                    osc.stop(t0 + duration + 0.02);
+                    osc.stop(t0 + duration + 0.03);
                 } catch (e) {}
             },
-            // Iconic Jet Lag Title / Broadcast Stinger
+
+            // Iconic Jet Lag Broadcast Title Fanfare (Warm Retro Brass Stinger)
             playIntroStinger() {
-                this.playTone(349.23, 'sawtooth', 0.18, 0.00, 0.10); // F4
-                this.playTone(440.00, 'sawtooth', 0.18, 0.10, 0.11); // A4
-                this.playTone(523.25, 'sawtooth', 0.22, 0.20, 0.12); // C5
-                this.playTone(698.46, 'triangle', 0.55, 0.32, 0.16); // F5
+                this.playSubDrop(0.0, 95, 42, 0.5, 0.28);
+                // F Major -> G Major -> Bb Major -> F Major 9th Broadcast Brass
+                const notes = [
+                    { f: 349.23, d: 0.00, dur: 0.20 }, // F4
+                    { f: 440.00, d: 0.09, dur: 0.20 }, // A4
+                    { f: 523.25, d: 0.18, dur: 0.22 }, // C5
+                    { f: 587.33, d: 0.28, dur: 0.24 }, // D5
+                    { f: 698.46, d: 0.38, dur: 0.65 }, // F5
+                    { f: 880.00, d: 0.38, dur: 0.65 }, // A5
+                    { f: 1046.50, d: 0.38, dur: 0.70 } // C6
+                ];
+                notes.forEach(n => {
+                    this.playSynthVoice(n.f, {
+                        type: 'sawtooth',
+                        detuneCents: 10,
+                        duration: n.dur,
+                        delay: n.d,
+                        vol: 0.11,
+                        filterStart: 500,
+                        filterPeak: 3800
+                    });
+                });
+                this.playNoisePerc(0.14, 0.38, 0.12, 3200);
             },
-            // Question Sent Whoosh + Telemetry Beep
+
+            // Question Dispatched Satellite Uplink Sound
             playQuestionSent() {
-                this.playTone(240, 'sine', 0.22, 0, 0.14, 680);
-                this.playTone(880, 'triangle', 0.12, 0.22, 0.12);
-                this.playTone(1174.66, 'triangle', 0.18, 0.34, 0.14);
+                this.playSubDrop(0, 140, 55, 0.25, 0.22);
+                this.playSynthVoice(280, { type: 'sine', duration: 0.26, delay: 0, vol: 0.16, slideTo: 840, filterPeak: 4000 });
+                this.playSynthVoice(587.33, { type: 'triangle', duration: 0.16, delay: 0.18, vol: 0.14, filterPeak: 3500 });
+                this.playSynthVoice(880.00, { type: 'triangle', duration: 0.28, delay: 0.28, vol: 0.16, filterPeak: 4200 });
+                this.playSynthVoice(1174.66, { type: 'sine', duration: 0.35, delay: 0.38, vol: 0.15, filterPeak: 4800 });
             },
-            // Countdown Radar Tick (increases pitch near the end)
+
+            // 12-Second Telemetry Suspense Tick + Sonar Ping + Tension Pluck
             playCountdownTick(secondsLeft) {
-                const isUrgent = secondsLeft <= 3;
-                const freq = isUrgent ? 987.77 : 587.33;
-                this.playTone(freq, 'sine', 0.09, 0, isUrgent ? 0.15 : 0.08);
+                const isUrgent = secondsLeft <= 4;
+                // Marimba / Clock Woodblock Tick
+                const tickFreq = isUrgent ? 1046.50 : 659.25;
+                this.playSynthVoice(tickFreq, {
+                    type: 'triangle',
+                    detuneCents: 4,
+                    duration: 0.11,
+                    delay: 0,
+                    vol: isUrgent ? 0.18 : 0.11,
+                    attack: 0.005,
+                    filterStart: 1200,
+                    filterPeak: 3200,
+                    sendEcho: true
+                });
+                // Off-beat subtle subdivision tick
+                this.playNoisePerc(0.035, 0.25, 0.05, 5200);
+                this.playSynthVoice(tickFreq * 0.75, {
+                    type: 'sine',
+                    duration: 0.08,
+                    delay: 0.5,
+                    vol: 0.07,
+                    attack: 0.005,
+                    sendEcho: false
+                });
+                // Deep Radar Sonar Ping every 2 seconds or when urgent
+                if (secondsLeft % 2 === 0 || isUrgent) {
+                    this.playSynthVoice(isUrgent ? 1318.51 : 987.77, {
+                        type: 'sine',
+                        duration: 0.32,
+                        delay: 0.02,
+                        vol: isUrgent ? 0.14 : 0.09,
+                        attack: 0.008,
+                        filterPeak: 4000,
+                        sendEcho: true
+                    });
+                }
                 if (isUrgent) {
-                    this.playTone(freq * 1.5, 'triangle', 0.06, 0.04, 0.07);
+                    this.playSubDrop(0, 85, 42, 0.22, 0.20);
                 }
             },
+
             // Dramatic Answer Reveal + Map Slice Stamp
             playAnswerReveal(isPositive = true) {
+                // Heavy Map Stamp Sub-Bass Impact
+                this.playSubDrop(0.0, 130, 34, 0.55, 0.38);
+                this.playNoisePerc(0.18, 0.0, 0.16, 1800);
+
                 if (isPositive) {
-                    // Positive Broadcast Brass Chord (C5 -> E5 -> G5 -> C6)
-                    this.playTone(523.25, 'triangle', 0.25, 0.00, 0.16);
-                    this.playTone(659.25, 'triangle', 0.25, 0.08, 0.16);
-                    this.playTone(783.99, 'triangle', 0.30, 0.16, 0.16);
-                    this.playTone(1046.50, 'sawtooth', 0.55, 0.24, 0.14);
+                    // Triumphant Jet Lag Brass Chord (F Major 9 -> Bb -> C -> F)
+                    const chord = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50];
+                    chord.forEach((f, idx) => {
+                        this.playSynthVoice(f, {
+                            type: 'sawtooth',
+                            detuneCents: 12,
+                            duration: 0.75,
+                            delay: idx * 0.035,
+                            vol: 0.09,
+                            filterStart: 400,
+                            filterPeak: 4200
+                        });
+                    });
                 } else {
-                    // Eliminated / Cut Chord
-                    this.playTone(392.00, 'sawtooth', 0.22, 0.00, 0.14);
-                    this.playTone(311.13, 'sawtooth', 0.45, 0.15, 0.16);
+                    // Dramatic Zone Elimination / Cut Brass Chord (Minor/Suspended Tension)
+                    const cutChord = [293.66, 349.23, 440.00, 523.25];
+                    cutChord.forEach((f, idx) => {
+                        this.playSynthVoice(f, {
+                            type: 'sawtooth',
+                            detuneCents: 14,
+                            duration: 0.30,
+                            delay: idx * 0.02,
+                            vol: 0.10,
+                            filterStart: 800,
+                            filterPeak: 2600
+                        });
+                        this.playSynthVoice(f * 0.84, {
+                            type: 'sawtooth',
+                            detuneCents: 14,
+                            duration: 0.65,
+                            delay: 0.24 + idx * 0.02,
+                            vol: 0.11,
+                            filterStart: 600,
+                            filterPeak: 2200
+                        });
+                    });
+                    this.playSubDrop(0.24, 98, 32, 0.55, 0.34);
                 }
-                // Map Stamp Sub-Bass Thud
-                this.playTone(130, 'sine', 0.35, 0.28, 0.24, 42);
             },
+
+            // Error / Invalid Room Code Sound
+            playErrorSound() {
+                this.playSynthVoice(220, { type: 'sawtooth', duration: 0.18, delay: 0, vol: 0.14, filterPeak: 1400, sendEcho: false });
+                this.playSynthVoice(164.81, { type: 'sawtooth', duration: 0.30, delay: 0.14, vol: 0.16, filterPeak: 1100, sendEcho: false });
+            },
+
             // Urgent Alert for Hiders when Seekers ask a question
             playHiderAlert() {
-                this.playTone(783.99, 'square', 0.14, 0.00, 0.10);
-                this.playTone(1046.50, 'square', 0.14, 0.16, 0.12);
-                this.playTone(783.99, 'square', 0.14, 0.32, 0.10);
-                this.playTone(1046.50, 'square', 0.28, 0.48, 0.14);
+                [0, 0.22, 0.44].forEach(d => {
+                    this.playSynthVoice(880, { type: 'square', duration: 0.14, delay: d, vol: 0.11, filterPeak: 2800 });
+                    this.playSynthVoice(1174.66, { type: 'square', duration: 0.14, delay: d + 0.10, vol: 0.11, filterPeak: 3200 });
+                });
+            },
+
+            // Procedural Jet Lag Chase / Tactical Map Background Music Loop
+            toggleBackgroundMusic() {
+                if (this.musicPlaying) {
+                    this.stopBackgroundMusic();
+                    return false;
+                }
+                this.startBackgroundMusic();
+                return true;
+            },
+
+            startBackgroundMusic() {
+                if (this.musicPlaying) return;
+                this.init();
+                this.musicPlaying = true;
+                this.musicStep = 0;
+
+                // D Dorian Tactical Broadcast Groove (inspired by Jet Lag's marimba/synth travel beds)
+                const arpNotes = [
+                    293.66, 440.00, 523.25, 587.33, 659.25, 587.33, 523.25, 440.00,
+                    349.23, 440.00, 523.25, 698.46, 659.25, 523.25, 440.00, 392.00
+                ];
+                const bassNotes = [73.42, 73.42, 87.31, 98.00]; // D2, D2, F2, G2
+
+                this.musicTimer = setInterval(() => {
+                    if (this.muted || !this.musicPlaying) return;
+                    const step = this.musicStep % 16;
+                    const note = arpNotes[step];
+
+                    // Soft Marimba / Pluck Synth Arpeggio
+                    this.playSynthVoice(note, {
+                        type: 'triangle',
+                        detuneCents: 5,
+                        duration: 0.19,
+                        delay: 0,
+                        vol: 0.045,
+                        attack: 0.008,
+                        filterStart: 500,
+                        filterPeak: 1900,
+                        sendEcho: true
+                    });
+
+                    // Warm Bass Pulse on every 4th step
+                    if (step % 4 === 0) {
+                        const bassFreq = bassNotes[Math.floor(step / 4) % bassNotes.length];
+                        this.playSynthVoice(bassFreq, {
+                            type: 'sawtooth',
+                            detuneCents: 6,
+                            duration: 0.65,
+                            delay: 0,
+                            vol: 0.055,
+                            attack: 0.02,
+                            filterStart: 140,
+                            filterPeak: 480,
+                            sendEcho: false
+                        });
+                    }
+
+                    // Subtle Broadcast Shaker on off-beats
+                    if (step % 2 === 1) {
+                        this.playNoisePerc(0.03, 0, 0.02, 6000);
+                    }
+
+                    this.musicStep++;
+                }, 220); // ~136 BPM eighth-note tactical groove
+            },
+
+            stopBackgroundMusic() {
+                this.musicPlaying = false;
+                if (this.musicTimer) {
+                    clearInterval(this.musicTimer);
+                    this.musicTimer = null;
+                }
             }
         };
 
-        // Outer World Ring til fejfri huller/inversioner uden Turf-diagonaler
-        const WORLD_OUTER_RING = [
-            [6.0, 52.5],
-            [18.0, 52.5],
-            [18.0, 59.5],
-            [6.0, 59.5],
-            [6.0, 52.5]
+        // ============================================================================
+        // KORT-UDBYDERE UDEN API-KRAV & GEOGRAFISK DATA FOR ZONE 1–99 (KBH & SJÆLLAND)
+        // ============================================================================
+        const FREE_TILE_SERVERS = [
+            "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
         ];
-        // Bounding Box der dækker Sjælland / Øresund til halvplans-klipning
-        const DENMARK_BBOX = [10.6, 54.4, 13.6, 56.45];
 
-        // Kilometer-projektion centreret ved København/Sjælland (55.70° N, 12.35° Ø)
-        // Sikrer at vinkelrette halveringslinjer (Termometer & Voronoi/Lufthavne) er 100% nøjagtige i virkelige km!
-        const REF_LAT = 55.70;
-        const REF_LNG = 12.35;
+        // Hjælpefunktioner til at huske spillerens aktive spil-session ved side-opdatering (F5 / Reload)
+        const SESSION_STORAGE_KEY = 'jl_active_session_v2';
+
+        const saveActiveSession = (sessionData) => {
+            if (!sessionData) return;
+            const serialized = JSON.stringify(sessionData);
+            try { sessionStorage.setItem(SESSION_STORAGE_KEY, serialized); } catch (e) {}
+            try { window.name = serialized; } catch (e) {}
+        };
+
+        const loadActiveSession = () => {
+            try {
+                const raw = sessionStorage.getItem(SESSION_STORAGE_KEY) || (window.name && window.name.startsWith('{') ? window.name : null);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.playerName && parsed.roomCode) {
+                    return parsed;
+                }
+            } catch (e) {}
+            return null;
+        };
+
+        const clearActiveSession = () => {
+            try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) {}
+            try { if (window.name && window.name.startsWith('{')) window.name = ''; } catch (e) {}
+        };
+
+        const BUILTIN_GEO_DATA = {
+            lufthavn: [
+                { name: "Københavns Lufthavn (CPH)", lat: 55.6180, lng: 12.6508 },
+                { name: "Roskilde Lufthavn (RKE)", lat: 55.5856, lng: 12.1314 }
+            ],
+            station: [
+                { name: "København H", lat: 55.6726, lng: 12.5649, line: "A / B / C / E / H / Regional" },
+                { name: "Nørreport St.", lat: 55.6831, lng: 12.5716, line: "A / B / C / E / H / M1 / M2" },
+                { name: "Østerport St.", lat: 55.6928, lng: 12.5871, line: "A / B / C / E / H / M3 / M4" },
+                { name: "Vesterport St.", lat: 55.6758, lng: 12.5625, line: "A / B / C / E / H" },
+                { name: "Dybbølsbro St.", lat: 55.6653, lng: 12.5594, line: "A / B / C / E / H" },
+                { name: "Valby St.", lat: 55.6639, lng: 12.5136, line: "B / C / H / Regional" },
+                { name: "København Syd (Ny Ellebjerg)", lat: 55.6522, lng: 12.5161, line: "A / E / F / M4 / Regional" },
+                { name: "Hellerup St.", lat: 55.7308, lng: 12.5675, line: "B / C / E / F / Kystbanen" },
+                { name: "Lyngby St.", lat: 55.7681, lng: 12.5033, line: "B / E" },
+                { name: "Holte St.", lat: 55.8167, lng: 12.4689, line: "B / E" },
+                { name: "Birkerød St.", lat: 55.8406, lng: 12.4239, line: "A / E" },
+                { name: "Hillerød St.", lat: 55.9272, lng: 12.3106, line: "A / Lokalbane" },
+                { name: "Farum St.", lat: 55.8117, lng: 12.3758, line: "B" },
+                { name: "Ballerup St.", lat: 55.7303, lng: 12.3586, line: "C / H" },
+                { name: "Frederikssund St.", lat: 55.8358, lng: 12.0644, line: "C" },
+                { name: "Høje Taastrup St.", lat: 55.6486, lng: 12.2694, line: "B / Regional" },
+                { name: "Roskilde St.", lat: 55.6392, lng: 12.0894, line: "Regional" },
+                { name: "Køge St.", lat: 55.4583, lng: 12.1869, line: "A / E / Regional" },
+                { name: "Køge Nord St.", lat: 55.4978, lng: 12.1778, line: "A / E / Regional" },
+                { name: "Helsingør St.", lat: 56.0339, lng: 12.6139, line: "Kystbanen / Lokalbane" },
+                { name: "Klampenborg St.", lat: 55.7769, lng: 12.5878, line: "C / Kystbanen" },
+                { name: "Flintholm St.", lat: 55.6858, lng: 12.4994, line: "C / F / H / M1 / M2" },
+                { name: "Ørestad St.", lat: 55.6292, lng: 12.5786, line: "M1 / Regional" },
+                { name: "Tårnby St.", lat: 55.6297, lng: 12.6014, line: "Regional" },
+                { name: "Glostrup St.", lat: 55.6633, lng: 12.3986, line: "B" },
+                { name: "Albertslund St.", lat: 55.6581, lng: 12.3536, line: "B" },
+                { name: "Hundige St.", lat: 55.5989, lng: 12.3333, line: "A / E" },
+                { name: "Solrød Strand St.", lat: 55.5333, lng: 12.2194, line: "A / E" },
+                { name: "Rungsted Kyst St.", lat: 55.8842, lng: 12.5283, line: "Kystbanen" },
+                { name: "Humlebæk St.", lat: 55.9636, lng: 12.5336, line: "Kystbanen" }
+            ],
+            metro: [
+                { name: "Kongens Nytorv (M1/M2/M3/M4)", lat: 55.6794, lng: 12.5858 },
+                { name: "Nørreport Metro (M1/M2)", lat: 55.6831, lng: 12.5716 },
+                { name: "Christianshavn (M1/M2)", lat: 55.6722, lng: 12.5914 },
+                { name: "Frederiksberg (M1/M2/M3)", lat: 55.6811, lng: 12.5342 },
+                { name: "Vanløse (M1/M2)", lat: 55.6878, lng: 12.4908 },
+                { name: "Flintholm (M1/M2)", lat: 55.6858, lng: 12.4994 },
+                { name: "Vestamager (M1)", lat: 55.6194, lng: 12.5758 },
+                { name: "Ørestad (M1)", lat: 55.6292, lng: 12.5786 },
+                { name: "Bella Center (M1)", lat: 55.6381, lng: 12.5831 },
+                { name: "Islands Brygge (M1)", lat: 55.6636, lng: 12.5853 },
+                { name: "Amagerbro (M2)", lat: 55.6633, lng: 12.6033 },
+                { name: "Femøren (M2)", lat: 55.6453, lng: 12.6383 },
+                { name: "Lufthavnen Metro (M2)", lat: 55.6297, lng: 12.6492 },
+                { name: "Rådhuspladsen (M3/M4)", lat: 55.6761, lng: 12.5683 },
+                { name: "Trianglen (M3)", lat: 55.6994, lng: 12.5772 },
+                { name: "Nørrebros Runddel (M3)", lat: 55.6944, lng: 12.5489 },
+                { name: "Enghave Plads (M3)", lat: 55.6675, lng: 12.5469 },
+                { name: "Orientkaj (M4)", lat: 55.7128, lng: 12.5989 },
+                { name: "Sluseholmen (M4)", lat: 55.6464, lng: 12.5489 }
+            ],
+            region: [
+                { name: "Region Hovedstaden", lat: 55.7600, lng: 12.4800 },
+                { name: "Region Sjælland", lat: 55.5200, lng: 12.0800 }
+            ],
+            landsdel: [
+                { name: "Byen København", lat: 55.6761, lng: 12.5683 },
+                { name: "Københavns Omegn", lat: 55.7100, lng: 12.4200 },
+                { name: "Nordsjælland", lat: 55.9272, lng: 12.3500 },
+                { name: "Østsjælland", lat: 55.5500, lng: 12.1500 }
+            ],
+            kommune: [
+                { name: "Københavns Kommune", lat: 55.6761, lng: 12.5683 },
+                { name: "Frederiksberg Kommune", lat: 55.6794, lng: 12.5347 },
+                { name: "Tårnby Kommune", lat: 55.6297, lng: 12.6014 },
+                { name: "Gentofte Kommune", lat: 55.7503, lng: 12.5539 },
+                { name: "Gladsaxe Kommune", lat: 55.7336, lng: 12.4889 },
+                { name: "Lyngby-Taarbæk Kommune", lat: 55.7706, lng: 12.5033 },
+                { name: "Hvidovre Kommune", lat: 55.6419, lng: 12.4767 },
+                { name: "Rødovre Kommune", lat: 55.6811, lng: 12.4561 },
+                { name: "Herlev Kommune", lat: 55.7247, lng: 12.4383 },
+                { name: "Ballerup Kommune", lat: 55.7303, lng: 12.3586 },
+                { name: "Glostrup Kommune", lat: 55.6633, lng: 12.3986 },
+                { name: "Albertslund Kommune", lat: 55.6581, lng: 12.3536 },
+                { name: "Brøndby Kommune", lat: 55.6500, lng: 12.4167 },
+                { name: "Høje-Taastrup Kommune", lat: 55.6486, lng: 12.2694 },
+                { name: "Roskilde Kommune", lat: 55.6415, lng: 12.0803 },
+                { name: "Køge Kommune", lat: 55.4583, lng: 12.1869 },
+                { name: "Hillerød Kommune", lat: 55.9272, lng: 12.3106 },
+                { name: "Helsingør Kommune", lat: 56.0339, lng: 12.6139 },
+                { name: "Rudersdal Kommune", lat: 55.8167, lng: 12.4689 },
+                { name: "Furesø Kommune", lat: 55.8117, lng: 12.3758 }
+            ],
+            bydel: [
+                { name: "Indre By", lat: 55.6805, lng: 12.5800 },
+                { name: "Østerbro", lat: 55.7060, lng: 12.5780 },
+                { name: "Nørrebro", lat: 55.6950, lng: 12.5480 },
+                { name: "Vesterbro / Kgs. Enghave", lat: 55.6630, lng: 12.5450 },
+                { name: "Valby", lat: 55.6610, lng: 12.5120 },
+                { name: "Vanløse", lat: 55.6880, lng: 12.4880 },
+                { name: "Brønshøj-Husum", lat: 55.7060, lng: 12.4950 },
+                { name: "Bispebjerg", lat: 55.7160, lng: 12.5280 },
+                { name: "Amager Øst", lat: 55.6580, lng: 12.6220 },
+                { name: "Amager Vest (Ørestad)", lat: 55.6350, lng: 12.5800 },
+                { name: "Frederiksberg", lat: 55.6800, lng: 12.5300 }
+            ],
+            mountain: [
+                { name: "Herstedhøje (67 m)", lat: 55.6858, lng: 12.3578 },
+                { name: "Geels Bakke (52 m)", lat: 55.7981, lng: 12.4836 },
+                { name: "Valby Bakke (31 m)", lat: 55.6694, lng: 12.5264 },
+                { name: "Bellahøj (37 m)", lat: 55.7022, lng: 12.5144 },
+                { name: "CopenHill / Amager Bakke (85 m)", lat: 55.6844, lng: 12.6206 },
+                { name: "Maglehøj Frederiksværk (91 m)", lat: 55.9739, lng: 12.0542 },
+                { name: "Gyldenløves Høj (126 m)", lat: 55.5458, lng: 11.8567 }
+            ],
+            park: [
+                { name: "Fælledparken", lat: 55.7008, lng: 12.5675 },
+                { name: "Kongens Have", lat: 55.6850, lng: 12.5792 },
+                { name: "Frederiksberg Have", lat: 55.6728, lng: 12.5258 },
+                { name: "Botanisk Have", lat: 55.6869, lng: 12.5739 },
+                { name: "Ørstedsparken", lat: 55.6808, lng: 12.5664 },
+                { name: "Valbyparken", lat: 55.6397, lng: 12.5206 },
+                { name: "Amager Strandpark", lat: 55.6556, lng: 12.6458 },
+                { name: "Dyrehaven (Jægersborg)", lat: 55.7889, lng: 12.5711 },
+                { name: "Utterslev Mose", lat: 55.7192, lng: 12.5064 },
+                { name: "Bernstorffsparken", lat: 55.7586, lng: 12.5519 }
+            ],
+            amusement: [
+                { name: "Tivoli", lat: 55.6737, lng: 12.5681 },
+                { name: "Dyrehavsbakken (Bakken)", lat: 55.7756, lng: 12.5753 }
+            ],
+            zoo: [
+                { name: "København Zoo", lat: 55.6725, lng: 12.5214 }
+            ],
+            aquarium: [
+                { name: "Den Blå Planet", lat: 55.6381, lng: 12.6558 }
+            ],
+            golf: [
+                { name: "Royal Golf Club (Ørestad)", lat: 55.6356, lng: 12.5694 },
+                { name: "Københavns Golf Klub (Dyrehaven)", lat: 55.7897, lng: 12.5642 },
+                { name: "Smørum Golfcenter", lat: 55.7417, lng: 12.2972 },
+                { name: "Vallensbæk Golf", lat: 55.6389, lng: 12.3711 },
+                { name: "Rungsted Golf Klub", lat: 55.8819, lng: 12.5228 },
+                { name: "Roskilde Golf Klub", lat: 55.6292, lng: 12.0556 },
+                { name: "Køge Golf Klub", lat: 55.4361, lng: 12.1917 }
+            ],
+            museum: [
+                { name: "Nationalmuseet", lat: 55.6747, lng: 12.5747 },
+                { name: "Statens Museum for Kunst (SMK)", lat: 55.6886, lng: 12.5783 },
+                { name: "Ny Carlsberg Glyptotek", lat: 55.6725, lng: 12.5722 },
+                { name: "Rosenborg Slot", lat: 55.6858, lng: 12.5772 },
+                { name: "Designmuseum Danmark", lat: 55.6867, lng: 12.5928 },
+                { name: "Experimentarium (Hellerup)", lat: 55.7275, lng: 12.5769 },
+                { name: "Louisiana Museum of Modern Art", lat: 55.9694, lng: 12.5422 },
+                { name: "ARKEN Museum (Ishøj)", lat: 55.6061, lng: 12.3875 },
+                { name: "Vikingeskibsmuseet (Roskilde)", lat: 55.6508, lng: 12.0806 },
+                { name: "Frilandsmuseet (Lyngby)", lat: 55.7867, lng: 12.4919 },
+                { name: "Kronborg Slot (Helsingør)", lat: 56.0392, lng: 12.6217 }
+            ],
+            cinema: [
+                { name: "Nordisk Film Biografer Imperial", lat: 55.6764, lng: 12.5614 },
+                { name: "Nordisk Film Biografer Palads", lat: 55.6769, lng: 12.5639 },
+                { name: "Grand Teatret", lat: 55.6789, lng: 12.5736 },
+                { name: "Empire Bio (Nørrebro)", lat: 55.6914, lng: 12.5567 },
+                { name: "Vue Fisketorvet", lat: 55.6625, lng: 12.5625 },
+                { name: "Nordisk Film Biografer Field's", lat: 55.6306, lng: 12.5772 },
+                { name: "Nordisk Film Biografer Falkoner", lat: 55.6819, lng: 12.5333 },
+                { name: "Nordisk Film Biografer Lyngby", lat: 55.7697, lng: 12.5036 },
+                { name: "Park Bio (Østerbro)", lat: 55.7039, lng: 12.5778 },
+                { name: "Kino RosTorv (Roskilde)", lat: 55.6406, lng: 12.0964 }
+            ],
+            hospital: [
+                { name: "Rigshospitalet", lat: 55.6961, lng: 12.5669 },
+                { name: "Bispebjerg Hospital", lat: 55.7133, lng: 12.5236 },
+                { name: "Hvidovre Hospital", lat: 55.6469, lng: 12.4675 },
+                { name: "Herlev Hospital", lat: 55.7317, lng: 12.4422 },
+                { name: "Gentofte Hospital", lat: 55.7436, lng: 12.5444 },
+                { name: "Amager Hospital", lat: 55.6503, lng: 12.6161 },
+                { name: "Glostrup Hospital", lat: 55.6689, lng: 12.3886 },
+                { name: "Nordsjællands Hospital Hillerød", lat: 55.9189, lng: 12.3133 },
+                { name: "Sjællands Universitetshospital Roskilde", lat: 55.6344, lng: 12.0942 },
+                { name: "Sjællands Universitetshospital Køge", lat: 55.4892, lng: 12.1714 }
+            ],
+            library: [
+                { name: "Den Sorte Diamant (Kgl. Bibliotek)", lat: 55.6736, lng: 12.5825 },
+                { name: "Københavns Hovedbibliotek", lat: 55.6808, lng: 12.5736 },
+                { name: "Frederiksberg Hovedbibliotek", lat: 55.6803, lng: 12.5314 },
+                { name: "Ørestad Bibliotek", lat: 55.6317, lng: 12.5794 },
+                { name: "Rentemestervej Bibliotek (NV)", lat: 55.7067, lng: 12.5297 },
+                { name: "Stadsbiblioteket i Lyngby", lat: 55.7717, lng: 12.5017 },
+                { name: "Gentofte Hovedbibliotek", lat: 55.7458, lng: 12.5733 },
+                { name: "Roskilde Bibliotek", lat: 55.6425, lng: 12.0847 },
+                { name: "Hillerød Bibliotek", lat: 55.9308, lng: 12.3106 }
+            ],
+            consulate: [
+                { name: "USA's Ambassade (Østerbro)", lat: 55.6939, lng: 12.5861 },
+                { name: "Tysklands Ambassade", lat: 55.6922, lng: 12.5906 },
+                { name: "Frankrigs Ambassade (Kgs. Nytorv)", lat: 55.6797, lng: 12.5872 },
+                { name: "Sveriges Ambassade (Sankt Annæ)", lat: 55.6817, lng: 12.5931 },
+                { name: "Storbritanniens Ambassade", lat: 55.6967, lng: 12.5878 },
+                { name: "Japans Ambassade (Havneholmen)", lat: 55.6619, lng: 12.5608 }
+            ],
+            coastline: [
+                { name: "Københavns Havn / Langelinie", lat: 55.6928, lng: 12.5992 },
+                { name: "Amager Strand (Øresund)", lat: 55.6556, lng: 12.6486 },
+                { name: "Hellerup Strand", lat: 55.7333, lng: 12.5811 },
+                { name: "Bellevue Strand (Klampenborg)", lat: 55.7778, lng: 12.5922 },
+                { name: "Rungsted Havn", lat: 55.8858, lng: 12.5439 },
+                { name: "Helsingør Nordhavn", lat: 56.0419, lng: 12.6167 },
+                { name: "Kalvebod Brygge / Sydhavnen", lat: 55.6461, lng: 12.5528 },
+                { name: "Brøndby Strand (Køge Bugt)", lat: 55.6167, lng: 12.4264 },
+                { name: "Hundige Strand", lat: 55.5917, lng: 12.3458 },
+                { name: "Køge Marina", lat: 55.4667, lng: 12.2039 },
+                { name: "Roskilde Havn (Roskilde Fjord)", lat: 55.6522, lng: 12.0789 },
+                { name: "Frederikssund Havn", lat: 55.8394, lng: 12.0542 }
+            ],
+            water: [
+                { name: "Søerne (Peblinge Sø)", lat: 55.6836, lng: 12.5611 },
+                { name: "Københavns Inderhavn", lat: 55.6786, lng: 12.5906 },
+                { name: "Damhussøen", lat: 55.6769, lng: 12.4764 },
+                { name: "Utterslev Mose", lat: 55.7192, lng: 12.5064 },
+                { name: "Lyngby Sø", lat: 55.7739, lng: 12.4875 },
+                { name: "Bagsværd Sø", lat: 55.7728, lng: 12.4583 },
+                { name: "Furesø", lat: 55.7986, lng: 12.4153 },
+                { name: "Esrum Sø", lat: 55.9833, lng: 12.3778 },
+                { name: "Arresø", lat: 55.9750, lng: 12.1167 },
+                { name: "Roskilde Fjord", lat: 55.6800, lng: 12.0700 }
+            ],
+            highspeed_rail: [
+                { name: "København H (Højhastighedsspor)", lat: 55.6726, lng: 12.5649 },
+                { name: "København Syd / Ny Ellebjerg", lat: 55.6522, lng: 12.5161 },
+                { name: "Københavns Lufthavn (Øresundsbanen)", lat: 55.6297, lng: 12.6492 },
+                { name: "Køge Nord (Den Nye Bane KBH-Ringsted)", lat: 55.4978, lng: 12.1778 }
+            ],
+            int_border: [
+                { name: "DK/SE Grænse (Øresundsbroen Peberholm)", lat: 55.5850, lng: 12.7450 },
+                { name: "DK/SE Søgrænse (Middelgrunden Øst)", lat: 55.7100, lng: 12.7300 },
+                { name: "DK/SE Søgrænse (Helsingør–Helsingborg)", lat: 56.0380, lng: 12.6520 }
+            ],
+            admin1_border: [
+                { name: "Regionsgrænse (Høje-Taastrup / Greve)", lat: 55.6150, lng: 12.2950 },
+                { name: "Regionsgrænse (Ballerup / Roskilde)", lat: 55.6950, lng: 12.2100 },
+                { name: "Regionsgrænse (Frederikssund / Lejre)", lat: 55.7450, lng: 12.0500 }
+            ],
+            admin2_border: [
+                { name: "Landsdelsgrænse (Rødovre / Vanløse)", lat: 55.6850, lng: 12.4720 },
+                { name: "Landsdelsgrænse (Hvidovre / Valby)", lat: 55.6520, lng: 12.4920 },
+                { name: "Landsdelsgrænse (Gentofte / Østerbro)", lat: 55.7240, lng: 12.5650 }
+            ]
+        };
+
+        // ============================================================================
+        // DE 80 OFFICIELLE SPØRGSMÅL FRA JET LAG: HIDE + SEEK REGELBOGEN
+        // ============================================================================
+        const OFFICIAL_RADAR_DISTANCES = [
+            { km: 0.402, label: "1/4 Mile (400 m)" },
+            { km: 0.805, label: "1/2 Mile (800 m)" },
+            { km: 1.609, label: "1 Mile (1,6 km)" },
+            { km: 4.828, label: "3 Miles (4,8 km)" },
+            { km: 8.047, label: "5 Miles (8,0 km)" },
+            { km: 16.093, label: "10 Miles (16,1 km)" },
+            { km: 40.234, label: "25 Miles (40,2 km)" },
+            { km: 80.467, label: "50 Miles (80,5 km)" },
+            { km: 160.934, label: "100 Miles (160,9 km)" }
+        ];
+
+        const OFFICIAL_THERMOMETER_DISTANCES = [
+            { km: 0.805, label: "1/2 Mile (800 m) — Small+" },
+            { km: 4.828, label: "3 Miles (4,8 km) — Small+" },
+            { km: 16.093, label: "10 Miles (16,1 km) — Medium+" },
+            { km: 80.467, label: "50 Miles (80,5 km) — Large" }
+        ];
+
+        const OFFICIAL_MEASURING_QUESTIONS = [
+            { id: "lufthavn", label: "1. Commercial Airport (Lufthavn)" },
+            { id: "highspeed_rail", label: "2. High-Speed Train Line" },
+            { id: "station", label: "3. Rail Station (Togstation)" },
+            { id: "int_border", label: "4. International Border (DK/SE)" },
+            { id: "admin1_border", label: "5. 1st Admin Border (Regionsgrænse)" },
+            { id: "admin2_border", label: "6. 2nd Admin Border (Landsdelsgrænse)" },
+            { id: "coastline", label: "7. Sea Level / Coastline (Kystlinje)" },
+            { id: "water", label: "8. Body of Water (Sø / Vandløb)" },
+            { id: "coastline", label: "9. Coastline (Hav / Fjord)" },
+            { id: "mountain", label: "10. Mountain / Hill (Bakke)" },
+            { id: "park", label: "11. Park" },
+            { id: "amusement", label: "12. Amusement Park (Forlystelsespark)" },
+            { id: "zoo", label: "13. Zoo" },
+            { id: "aquarium", label: "14. Aquarium (Akvarium)" },
+            { id: "golf", label: "15. Golf Course (Golfbane)" },
+            { id: "museum", label: "16. Museum" },
+            { id: "cinema", label: "17. Movie Theater (Biograf)" },
+            { id: "hospital", label: "18. Hospital" },
+            { id: "library", label: "19. Library (Bibliotek)" },
+            { id: "consulate", label: "20. Foreign Consulate (Ambassade)" }
+        ];
+
+        const OFFICIAL_MATCHING_QUESTIONS = [
+            { id: "lufthavn", label: "1. Commercial Airport (Lufthavn)" },
+            { id: "station", label: "2. Transit Line (Toglinje)", mode: "line_match" },
+            { id: "station_len", label: "3. Station's Name Length (Tegn)", mode: "station_length" },
+            { id: "street_path", label: "4. Street or Path (Gade/Sti)", mode: "manual" },
+            { id: "region", label: "5. 1st Admin Division (Region)" },
+            { id: "landsdel", label: "6. 2nd Admin Division (Landsdel)" },
+            { id: "kommune", label: "7. 3rd Admin Division (Kommune)" },
+            { id: "bydel", label: "8. 4th Admin Division (Bydel)" },
+            { id: "mountain", label: "9. Mountain / Hill (Bakke)" },
+            { id: "landmass", label: "10. Landmass (Sjælland vs. Amager)", mode: "landmass" },
+            { id: "park", label: "11. Park" },
+            { id: "amusement", label: "12. Amusement Park (Forlystelsespark)" },
+            { id: "zoo", label: "13. Zoo" },
+            { id: "aquarium", label: "14. Aquarium (Akvarium)" },
+            { id: "golf", label: "15. Golf Course (Golfbane)" },
+            { id: "museum", label: "16. Museum" },
+            { id: "cinema", label: "17. Movie Theater (Biograf)" },
+            { id: "hospital", label: "18. Hospital" },
+            { id: "library", label: "19. Library (Bibliotek)" },
+            { id: "consulate", label: "20. Foreign Consulate (Ambassade)" }
+        ];
+
+        const OFFICIAL_TENTACLE_QUESTIONS = [
+            { id: "museum_1m", cat: "museum", radiusKm: 1.609, shortTitle: "Museum", label: "1. Museums Within 1 Mile (1,6 km)" },
+            { id: "library_1m", cat: "library", radiusKm: 1.609, shortTitle: "Bibliotek", label: "2. Libraries Within 1 Mile (1,6 km)" },
+            { id: "cinema_1m", cat: "cinema", radiusKm: 1.609, shortTitle: "Biograf", label: "3. Movie Theaters Within 1 Mile (1,6 km)" },
+            { id: "hospital_1m", cat: "hospital", radiusKm: 1.609, shortTitle: "Hospital", label: "4. Hospitals Within 1 Mile (1,6 km)" },
+            { id: "metro_15m", cat: "metro", radiusKm: 24.14, shortTitle: "Metrostation", label: "5. Metro Lines Within 15 Miles (24,1 km)" },
+            { id: "zoo_15m", cat: "zoo", radiusKm: 24.14, shortTitle: "Zoo", label: "6. Zoos Within 15 Miles (24,1 km)" },
+            { id: "aquarium_15m", cat: "aquarium", radiusKm: 24.14, shortTitle: "Akvarium", label: "7. Aquariums Within 15 Miles (24,1 km)" },
+            { id: "amusement_15m", cat: "amusement", radiusKm: 24.14, shortTitle: "Forlystelsespark", label: "8. Amusement Parks Within 15 Miles (24,1 km)" },
+            { id: "station_15m", cat: "station", radiusKm: 24.14, shortTitle: "Togstation", label: "9. Togstationer inden for 15 Miles (24,1 km)" }
+        ];
+
+        const OFFICIAL_PHOTO_QUESTIONS = [
+            { id: "photo_station_bldg", size: "Small+", title: "1. Any Building Visible from Station", text: "Stå lige foran stationsindgangen. Tag billede af en synlig bygning (tag + begge sider skal ses, toppen i øverste 1/3)." },
+            { id: "photo_widest_street", size: "Small+", title: "2. Widest Street", text: "Tag et billede af den bredeste gade i din zone (begge sider af gaden skal være synlige)." },
+            { id: "photo_tree", size: "Small+", title: "3. A Tree", text: "Tag et billede af et træ, hvor hele træet fra rod til krone er med på billedet." },
+            { id: "photo_tallest_sightline", size: "Small+", title: "4. Tallest Structure in Current Sightline", text: "Den højeste struktur fra dit nuværende synsfelt (top + begge sider, toppen i øverste 1/3)." },
+            { id: "photo_you", size: "Small+", title: "5. You (Selfie)", text: "Selfie-kamera, telefonen vinkelret på jorden, armen strakt helt ud, 1x linse uden zoom." },
+            { id: "photo_sky", size: "Small+", title: "6. The Sky", text: "Læg telefonen fladt på jorden og tag et billede direkte op i himlen uden zoom." },
+            { id: "photo_tallest_station", size: "Medium+", title: "7. Tallest Building Visible from Station", text: "Stå lige uden for stationen og fotografer den højeste synlige bygning (ikke selve stationen)." },
+            { id: "photo_trace_street", size: "Medium+", title: "8. Trace Nearest Street/Path", text: "Tegn din nærmeste gade/sti op fra kryds til kryds uden vejnavne." },
+            { id: "photo_2_buildings", size: "Medium+", title: "9. Two Buildings", text: "Tag et billede af 2 bygninger ved siden af hinanden (fra bunden og op til 4. etage)." },
+            { id: "photo_restaurant", size: "Medium+", title: "10. Restaurant Interior", text: "Tag et billede ind gennem vinduet på en restaurant udefra (ingen zoom)." },
+            { id: "photo_park", size: "Medium+", title: "11. Park", text: "Tag et billede af en park (ingen zoom, stå mindst 1,5 meter fra forhindringer)." },
+            { id: "photo_grocery", size: "Medium+", title: "12. Grocery Store Aisle", text: "Stå for enden af en supermarkedsgang og tag et billede lige ned gennem gangen." },
+            { id: "photo_worship", size: "Medium+", title: "13. Place of Worship", text: "1,5 x 1,5 meter udsnit af en kirke/moské/synagoge med 3 tydelige arkitektoniske detaljer." },
+            { id: "photo_platform", size: "Medium+", title: "14. Train Platform", text: "1,5 x 1,5 meter udsnit af togperronen med 3 tydelige elementer." },
+            { id: "photo_half_mile_streets", size: "Large", title: "15. 1/2 Mile of Streets Traced", text: "Tegn 800 meter sammenhængende gader med mindst 5 sving (nord-op orienteret)." },
+            { id: "photo_tallest_mtn", size: "Large", title: "16. Tallest Hill/Mountain from Station", text: "Højeste bakke/høj synlig fra stationen (maks 3x zoom)." },
+            { id: "photo_biggest_water", size: "Large", title: "17. Biggest Body of Water in Zone", text: "Største vandområde i din gemmezone (begge bredder eller horisonten skal ses)." },
+            { id: "photo_5_buildings", size: "Large", title: "18. Five Buildings", text: "Tag et billede af 5 bygninger på række (fra gadeplan op til 4. sal)." }
+        ];
+
+        // ============================================================================
+        // GEOMETRI- & VORONOI-MOTOR (SUTHERLAND-HODGMAN I EKSAKTE KILOMETER)
+        // ============================================================================
+        const getNearestPOI = (lat, lng, list) => {
+            if (!list || list.length === 0) return null;
+            const fromPt = turf.point([lng, lat]);
+            let best = null;
+            let bestDist = Infinity;
+            let bestIdx = 0;
+
+            list.forEach((item, idx) => {
+                const d = turf.distance(fromPt, turf.point([item.lng, item.lat]), { units: 'kilometers' });
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = item;
+                    bestIdx = idx;
+                }
+            });
+
+            return best ? { ...best, distanceKm: bestDist, index: bestIdx } : null;
+        };
+
+        // Konverterer lat/lng til lokale kilometer-koordinater omkring København (55.676° N)
+        const REF_LAT = 55.6761;
+        const REF_LNG = 12.5683;
         const KM_PER_LAT = 111.32;
         const KM_PER_LNG = 111.32 * Math.cos((REF_LAT * Math.PI) / 180);
 
-        const toKmXY = (lng, lat) => [
-            (lng - REF_LNG) * KM_PER_LNG,
-            (lat - REF_LAT) * KM_PER_LAT
-        ];
+        const toXY = (lat, lng) => ({
+            x: (lng - REF_LNG) * KM_PER_LNG,
+            y: (lat - REF_LAT) * KM_PER_LAT
+        });
+
         const toLngLat = (x, y) => [
             REF_LNG + x / KM_PER_LNG,
             REF_LAT + y / KM_PER_LAT
         ];
 
-        // Sutherland-Hodgman eksakt lineær halvplans-klipper i km-koordinater
-        // Beholder alle punkter (x,y) hvor (x - mx)*nx + (y - my)*ny >= 0
-        const clipPolygonHalfPlaneKm = (polyKm, mx, my, nx, ny) => {
-            if (!polyKm || polyKm.length === 0) return [];
-            const out = [];
-            const isInside = (pt) => (pt[0] - mx) * nx + (pt[1] - my) * ny >= -1e-9;
-            const intersect = (p1, p2) => {
-                const v1 = (p1[0] - mx) * nx + (p1[1] - my) * ny;
-                const v2 = (p2[0] - mx) * nx + (p2[1] - my) * ny;
-                const denom = v1 - v2;
-                if (Math.abs(denom) < 1e-12) return p1;
-                const t = v1 / denom;
-                return [p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1])];
+        // Sutherland-Hodgman Polygon Clipping: Beholder punkter P hvor dist(P, keepPt) <= dist(P, excludePt)
+        const clipPolygonBisector = (polyXY, keepXY, excludeXY) => {
+            if (!polyXY || polyXY.length < 3) return [];
+            const dx = excludeXY.x - keepXY.x;
+            const dy = excludeXY.y - keepXY.y;
+            const midX = (keepXY.x + excludeXY.x) / 2;
+            const midY = (keepXY.y + excludeXY.y) / 2;
+
+            // Normalvektor peger fra keep mod exclude; et punkt P er tættere på keep hvis (P - mid) · d <= 0
+            const isInside = (p) => (p.x - midX) * dx + (p.y - midY) * dy <= 1e-7;
+
+            const intersect = (a, b) => {
+                const va = (a.x - midX) * dx + (a.y - midY) * dy;
+                const vb = (b.x - midX) * dx + (b.y - midY) * dy;
+                const denom = va - vb;
+                if (Math.abs(denom) < 1e-12) return a;
+                const t = va / denom;
+                return {
+                    x: a.x + t * (b.x - a.x),
+                    y: a.y + t * (b.y - a.y)
+                };
             };
 
-            for (let i = 0; i < polyKm.length; i++) {
-                const cur = polyKm[i];
-                const prev = polyKm[(i + polyKm.length - 1) % polyKm.length];
+            const out = [];
+            for (let i = 0; i < polyXY.length; i++) {
+                const cur = polyXY[i];
+                const prev = polyXY[(i + polyXY.length - 1) % polyXY.length];
                 const curIn = isInside(cur);
                 const prevIn = isInside(prev);
+
                 if (curIn) {
                     if (!prevIn) out.push(intersect(prev, cur));
                     out.push(cur);
@@ -486,501 +1219,192 @@
             return out;
         };
 
-        // Udregner eksakt Voronoi-celle for punkt #targetIdx blandt points (fungerer perfekt selv med 2 eller 3 lufthavne!)
-        const computeExactVoronoiRingLngLat = (points, targetIdx) => {
-            const [minLng, minLat, maxLng, maxLat] = DENMARK_BBOX;
-            let polyKm = [
-                toKmXY(minLng, minLat),
-                toKmXY(maxLng, minLat),
-                toKmXY(maxLng, maxLat),
-                toKmXY(minLng, maxLat)
-            ];
-            const target = points[targetIdx];
-            if (!target) return null;
-            const [tx, ty] = toKmXY(target.lng, target.lat);
+        const OUTER_BOUNDS_LNGLAT = [
+            [10.2, 54.4],
+            [14.2, 54.4],
+            [14.2, 56.6],
+            [10.2, 56.6],
+            [10.2, 54.4]
+        ];
 
-            for (let j = 0; j < points.length; j++) {
-                if (j === targetIdx) continue;
-                const [ox, oy] = toKmXY(points[j].lng, points[j].lat);
-                const dx = tx - ox;
-                const dy = ty - oy;
-                if (Math.hypot(dx, dy) < 1e-5) continue;
-                const mx = (tx + ox) / 2;
-                const my = (ty + oy) / 2;
-                polyKm = clipPolygonHalfPlaneKm(polyKm, mx, my, dx, dy);
-                if (polyKm.length < 3) return null;
+        const getInitialBoundsXY = () => [
+            toXY(54.4, 10.2),
+            toXY(54.4, 14.2),
+            toXY(56.6, 14.2),
+            toXY(56.6, 10.2)
+        ];
+
+        const buildExclusionGeoJSON = (obj) => {
+            if (!obj) return null;
+            try {
+                // 1. RADIUS (Enkelt cirkel eller inverteret cirkel med hul)
+                if (obj.type === 'radius') {
+                    const circle = turf.circle([obj.lng, obj.lat], Math.max(0.1, Number(obj.radiusKm) || 1), {
+                        steps: 72,
+                        units: 'kilometers'
+                    });
+                    if (!obj.invert) return circle;
+                    const holeRing = circle.geometry.coordinates[0];
+                    return turf.polygon([OUTER_BOUNDS_LNGLAT, holeRing]);
+                }
+
+                // 2. COMPOUND RADIUS (Measuring spørgsmål for lufthavne, stationer, kystlinje osv.)
+                if (obj.type === 'compound_radius' && Array.isArray(obj.points) && obj.points.length > 0) {
+                    const rKm = Math.max(0.15, Number(obj.radiusKm) || 1);
+                    const circles = obj.points.map(p =>
+                        turf.circle([p.lng, p.lat], rKm, { steps: 48, units: 'kilometers' })
+                    );
+
+                    if (!obj.invert) {
+                        // Længere væk end rKm -> Farv alle cirklerne røde
+                        return turf.featureCollection(circles);
+                    }
+
+                    // Tættere på end rKm -> Farv alt UDEN FOR cirklerne rødt
+                    let merged = circles[0];
+                    for (let i = 1; i < circles.length; i++) {
+                        try {
+                            const u = turf.union(merged, circles[i]);
+                            if (u) merged = u;
+                        } catch (e) {}
+                    }
+                    const worldPoly = turf.polygon([OUTER_BOUNDS_LNGLAT]);
+                    try {
+                        const diff = turf.difference(worldPoly, merged);
+                        if (diff) return diff;
+                    } catch (e) {}
+                    return merged;
+                }
+
+                // 3. POLYGON (Frihåndszone eller Landmass)
+                if (obj.type === 'polygon' && Array.isArray(obj.coords) && obj.coords.length >= 3) {
+                    const ring = obj.coords.map(c => [c.lng, c.lat]);
+                    ring.push([obj.coords[0].lng, obj.coords[0].lat]);
+                    if (!obj.invert) return turf.polygon([ring]);
+                    return turf.polygon([OUTER_BOUNDS_LNGLAT, ring]);
+                }
+
+                // 4. THERMOMETER (Eksakt vinkelret halveringslinje i kilometer)
+                if (obj.type === 'thermometer' && obj.pointA && obj.pointB) {
+                    const aXY = toXY(obj.pointA.lat, obj.pointA.lng);
+                    const bXY = toXY(obj.pointB.lat, obj.pointB.lng);
+                    // Hvis VARMERE (tættere på B), skal vi farve den kolde halvdel (tættere på A) rød!
+                    // Hvis KOLDERE (tættere på A), skal vi farve halvdelen tættere på B rød!
+                    const excludeSideCenter = obj.warmer ? aXY : bXY;
+                    const keepSideCenter = obj.warmer ? bXY : aXY;
+
+                    const clippedXY = clipPolygonBisector(getInitialBoundsXY(), excludeSideCenter, keepSideCenter);
+                    if (clippedXY.length < 3) return null;
+                    const ring = clippedXY.map(p => toLngLat(p.x, p.y));
+                    ring.push(ring[0]);
+                    return turf.polygon([ring]);
+                }
+
+                // 5. VORONOI CELL (Matching & Tentacles i eksakte kilometer!)
+                if (obj.type === 'voronoi_cell' && Array.isArray(obj.points) && obj.points.length > 0) {
+                    const targetIdx = obj.targetIdx ?? 0;
+                    const targetPt = obj.points[targetIdx];
+                    if (!targetPt) return null;
+
+                    const targetXY = toXY(targetPt.lat, targetPt.lng);
+                    let cellXY = getInitialBoundsXY();
+
+                    obj.points.forEach((otherPt, idx) => {
+                        if (idx === targetIdx) return;
+                        const otherXY = toXY(otherPt.lat, otherPt.lng);
+                        if (Math.hypot(otherXY.x - targetXY.x, otherXY.y - targetXY.y) < 0.01) return;
+                        cellXY = clipPolygonBisector(cellXY, targetXY, otherXY);
+                    });
+
+                    if (cellXY.length < 3) return null;
+                    const cellRing = cellXY.map(p => toLngLat(p.x, p.y));
+                    cellRing.push(cellRing[0]);
+
+                    if (!obj.invert) {
+                        // Svar = NEJ (Ikke denne lufthavn/kommune) -> Farv selve Voronoi-cellen rød
+                        return turf.polygon([cellRing]);
+                    }
+                    // Svar = JA (Match!) -> Farv alt UDEN FOR denne Voronoi-celle rødt
+                    return turf.polygon([OUTER_BOUNDS_LNGLAT, cellRing]);
+                }
+            } catch (err) {
+                console.warn("GeoJSON build warning:", err);
             }
-
-            const ring = polyKm.map(([x, y]) => toLngLat(x, y));
-            ring.push(ring[0]);
-            return ring;
+            return null;
         };
 
-        // Udregner eksakt Termometer-halvplan i km-koordinater (100% vinkelret på A->B linjen!)
-        const computeExactThermometerRingLngLat = (pointA, pointB, warmer) => {
-            const [minLng, minLat, maxLng, maxLat] = DENMARK_BBOX;
-            let polyKm = [
-                toKmXY(minLng, minLat),
-                toKmXY(maxLng, minLat),
-                toKmXY(maxLng, maxLat),
-                toKmXY(minLng, maxLat)
-            ];
-            const [ax, ay] = toKmXY(pointA.lng, pointA.lat);
-            const [bx, by] = toKmXY(pointB.lng, pointB.lat);
-            const mx = (ax + bx) / 2;
-            const my = (ay + by) / 2;
-            // Hvis Varmere ved B: udeluk siden tættest på A (vektor mod A = ax - bx).
-            // Hvis Koldere ved B: udeluk siden tættest på B (vektor mod B = bx - ax).
-            const nx = warmer ? (ax - bx) : (bx - ax);
-            const ny = warmer ? (ay - by) : (by - ay);
-            polyKm = clipPolygonHalfPlaneKm(polyKm, mx, my, nx, ny);
-            if (polyKm.length < 3) return null;
-            const ring = polyKm.map(([x, y]) => toLngLat(x, y));
-            ring.push(ring[0]);
-            return ring;
-        };
-
-        // Komplett datasæt for Zone 1–99 (København & Sjælland) til de 80 officielle Jet Lag spørgsmål
-        const BUILTIN_GEO_DATA = {
-            lufthavn: [
-                { name: "Københavns Lufthavn (CPH Kastrup)", lat: 55.6180, lng: 12.6508 },
-                { name: "Roskilde Lufthavn (RKE)", lat: 55.5856, lng: 12.1314 },
-                { name: "Malmö Airport (MMX)", lat: 55.5363, lng: 13.3762 },
-                { name: "Ängelholm-Helsingborg Airport (AGH)", lat: 56.2961, lng: 12.8471 }
-            ],
-            station: [
-                { name: "København H", line: "S-tog / Regional", lat: 55.6726, lng: 12.5649 },
-                { name: "Nørreport", line: "S-tog / Metro", lat: 55.6831, lng: 12.5716 },
-                { name: "Østerport", line: "S-tog / Metro", lat: 55.6926, lng: 12.5872 },
-                { name: "Frederiksberg", line: "M1 / M2 / M3", lat: 55.6812, lng: 12.5342 },
-                { name: "Flintholm", line: "Linje C / F / M1 / M2", lat: 55.6859, lng: 12.4994 },
-                { name: "Valby", line: "Linje B / C / H", lat: 55.6637, lng: 12.5141 },
-                { name: "København Syd", line: "Linje A / E / F / M4", lat: 55.6522, lng: 12.5153 },
-                { name: "Ørestad", line: "M1 / Regional", lat: 55.6290, lng: 12.5790 },
-                { name: "Hellerup", line: "Linje A / C / E / F", lat: 55.7308, lng: 12.5673 },
-                { name: "Lyngby", line: "Linje A / E", lat: 55.7681, lng: 12.5029 },
-                { name: "Holte", line: "Linje A / E", lat: 55.8169, lng: 12.4689 },
-                { name: "Hillerød", line: "Linje A / Lokalbane", lat: 55.9279, lng: 12.3106 },
-                { name: "Birkerød", line: "Linje A", lat: 55.8406, lng: 12.4239 },
-                { name: "Farum", line: "Linje B", lat: 55.8117, lng: 12.3611 },
-                { name: "Buddinge", line: "Linje B", lat: 55.7471, lng: 12.4932 },
-                { name: "Herlev", line: "Linje C / H", lat: 55.7190, lng: 12.4419 },
-                { name: "Ballerup", line: "Linje C / H", lat: 55.7309, lng: 12.3586 },
-                { name: "Måløv", line: "Linje C / H", lat: 55.7476, lng: 12.3183 },
-                { name: "Frederikssund", line: "Linje C", lat: 55.8358, lng: 12.0652 },
-                { name: "Rødovre", line: "Linje B", lat: 55.6644, lng: 12.4581 },
-                { name: "Hvidovre", line: "Linje B", lat: 55.6433, lng: 12.4767 },
-                { name: "Glostrup", line: "Linje B", lat: 55.6632, lng: 12.3982 },
-                { name: "Albertslund", line: "Linje B", lat: 55.6581, lng: 12.3538 },
-                { name: "Høje Taastrup", line: "Linje B / Regional", lat: 55.6487, lng: 12.2695 },
-                { name: "Roskilde", line: "Regional / IC", lat: 55.6391, lng: 12.0890 },
-                { name: "Brøndby Strand", line: "Linje A", lat: 55.6209, lng: 12.4226 },
-                { name: "Vallensbæk", line: "Linje A", lat: 55.6235, lng: 12.3881 },
-                { name: "Ishøj", line: "Linje A", lat: 55.6134, lng: 12.3568 },
-                { name: "Hundige", line: "Linje A / E", lat: 55.5988, lng: 12.3338 },
-                { name: "Greve", line: "Linje A / E", lat: 55.5815, lng: 12.2954 },
-                { name: "Solrød Strand", line: "Linje A / E", lat: 55.5333, lng: 12.2189 },
-                { name: "Køge", line: "Linje E / Regional", lat: 55.4582, lng: 12.1868 },
-                { name: "Køge Nord", line: "Linje E / IC", lat: 55.4970, lng: 12.1770 },
-                { name: "Klampenborg", line: "Linje C / Kystbanen", lat: 55.7770, lng: 12.5878 },
-                { name: "Rungsted Kyst", line: "Kystbanen", lat: 55.8842, lng: 12.5333 },
-                { name: "Humlebæk", line: "Kystbanen", lat: 55.9628, lng: 12.5311 },
-                { name: "Helsingør", line: "Kystbanen / Lokalbane", lat: 56.0335, lng: 12.6143 },
-                { name: "Ringsted", line: "Regional / IC", lat: 55.4375, lng: 11.7873 },
-                { name: "Holbæk", line: "Regional", lat: 55.7156, lng: 11.7097 }
-            ],
-            metro: [
-                { name: "Kgs. Nytorv Metro", lat: 55.6794, lng: 12.5859 },
-                { name: "Nørreport Metro", lat: 55.6831, lng: 12.5716 },
-                { name: "Christianshavn Metro", lat: 55.6722, lng: 12.5914 },
-                { name: "Amagerbro Metro", lat: 55.6633, lng: 12.6033 },
-                { name: "Femøren Metro", lat: 55.6453, lng: 12.6383 },
-                { name: "Lufthavnen Metro", lat: 55.6297, lng: 12.6486 },
-                { name: "Islands Brygge Metro", lat: 55.6636, lng: 12.5789 },
-                { name: "DR Byen Metro", lat: 55.6561, lng: 12.5892 },
-                { name: "Bella Center Metro", lat: 55.6381, lng: 12.5831 },
-                { name: "Vestamager Metro", lat: 55.6194, lng: 12.5761 },
-                { name: "Forum Metro", lat: 55.6822, lng: 12.5528 },
-                { name: "Frederiksberg Metro", lat: 55.6812, lng: 12.5342 },
-                { name: "Fasanvej Metro", lat: 55.6819, lng: 12.5231 },
-                { name: "Vanløse Metro", lat: 55.6878, lng: 12.4908 },
-                { name: "Rådhuspladsen Metro", lat: 55.6761, lng: 12.5683 },
-                { name: "Gammel Strand Metro", lat: 55.6781, lng: 12.5794 },
-                { name: "Marmorkirken Metro", lat: 55.6850, lng: 12.5894 },
-                { name: "Trianglen Metro", lat: 55.6994, lng: 12.5772 },
-                { name: "Poul Henningsens Plads Metro", lat: 55.7089, lng: 12.5778 },
-                { name: "Vibenshus Runddel Metro", lat: 55.7058, lng: 12.5608 },
-                { name: "Skjolds Plads Metro", lat: 55.7042, lng: 12.5489 },
-                { name: "Nørrebros Runddel Metro", lat: 55.6942, lng: 12.5494 },
-                { name: "Nuuks Plads Metro", lat: 55.6894, lng: 12.5453 },
-                { name: "Aksel Møllers Have Metro", lat: 55.6856, lng: 12.5333 },
-                { name: "Enghave Plads Metro", lat: 55.6675, lng: 12.5439 },
-                { name: "Orientkaj Metro", lat: 55.7128, lng: 12.5967 },
-                { name: "Mozarts Plads Metro", lat: 55.6458, lng: 12.5269 }
-            ],
-            high_speed_line: [
-                { name: "København H (Højhastighedsspor)", lat: 55.6726, lng: 12.5649 },
-                { name: "København Syd (Højhastighedsspor)", lat: 55.6522, lng: 12.5153 },
-                { name: "Hvidovre Fjernbane", lat: 55.6305, lng: 12.4410 },
-                { name: "Vallensbæk Højhastighedsbane", lat: 55.6050, lng: 12.3500 },
-                { name: "Køge Nord (Højhastighedsspor)", lat: 55.4970, lng: 12.1770 },
-                { name: "Ringsted (Højhastighedsspor)", lat: 55.4375, lng: 11.7873 }
-            ],
-            admin_1: [
-                { name: "Region Hovedstaden", lat: 55.7600, lng: 12.4500 },
-                { name: "Region Sjælland", lat: 55.5200, lng: 11.9200 }
-            ],
-            admin_2: [
-                { name: "Landsdel: Byen København (KBH, FRB, Tårnby, Dragør)", lat: 55.6650, lng: 12.5750 },
-                { name: "Landsdel: Københavns Omegn (Vestegnen & Nord)", lat: 55.7050, lng: 12.4100 },
-                { name: "Landsdel: Nordsjælland", lat: 55.9200, lng: 12.3200 },
-                { name: "Landsdel: Østsjælland (Roskilde, Køge, Greve, Solrød)", lat: 55.5650, lng: 12.1400 },
-                { name: "Landsdel: Vest- og Sydsjælland (Ringsted, Holbæk m.fl.)", lat: 55.5700, lng: 11.7500 }
-            ],
-            kommune: [
-                { name: "Københavns Kommune", lat: 55.6786, lng: 12.5764 },
-                { name: "Frederiksberg Kommune", lat: 55.6794, lng: 12.5347 },
-                { name: "Tårnby Kommune", lat: 55.6295, lng: 12.6042 },
-                { name: "Dragør Kommune", lat: 55.5942, lng: 12.6703 },
-                { name: "Rødovre Kommune", lat: 55.6805, lng: 12.4539 },
-                { name: "Hvidovre Kommune", lat: 55.6419, lng: 12.4764 },
-                { name: "Glostrup Kommune", lat: 55.6667, lng: 12.3989 },
-                { name: "Brøndby Kommune", lat: 55.6475, lng: 12.4150 },
-                { name: "Albertslund Kommune", lat: 55.6660, lng: 12.3538 },
-                { name: "Vallensbæk Kommune", lat: 55.6310, lng: 12.3780 },
-                { name: "Ishøj Kommune", lat: 55.6155, lng: 12.3512 },
-                { name: "Høje-Taastrup Kommune", lat: 55.6500, lng: 12.2720 },
-                { name: "Gentofte Kommune", lat: 55.7486, lng: 12.5569 },
-                { name: "Lyngby-Taarbæk Kommune", lat: 55.7720, lng: 12.5020 },
-                { name: "Gladsaxe Kommune", lat: 55.7360, lng: 12.4780 },
-                { name: "Herlev Kommune", lat: 55.7240, lng: 12.4380 },
-                { name: "Ballerup Kommune", lat: 55.7310, lng: 12.3610 },
-                { name: "Furesø Kommune (Værløse/Farum)", lat: 55.8011, lng: 12.3728 },
-                { name: "Rudersdal Kommune (Holte/Birkerød)", lat: 55.8350, lng: 12.4411 },
-                { name: "Hørsholm Kommune", lat: 55.8810, lng: 12.5020 },
-                { name: "Allerød Kommune", lat: 55.8710, lng: 12.3560 },
-                { name: "Hillerød Kommune", lat: 55.9279, lng: 12.3106 },
-                { name: "Fredensborg Kommune", lat: 55.9730, lng: 12.4040 },
-                { name: "Helsingør Kommune", lat: 56.0335, lng: 12.6143 },
-                { name: "Frederikssund Kommune", lat: 55.8358, lng: 12.0652 },
-                { name: "Egedal Kommune (Ølstykke/Stenløse)", lat: 55.7750, lng: 12.1890 },
-                { name: "Roskilde Kommune", lat: 55.6391, lng: 12.0890 },
-                { name: "Greve Kommune", lat: 55.5860, lng: 12.2960 },
-                { name: "Solrød Kommune", lat: 55.5333, lng: 12.2189 },
-                { name: "Køge Kommune", lat: 55.4582, lng: 12.1868 }
-            ],
-            bydel: [
-                { name: "Indre By", lat: 55.6805, lng: 12.5785 },
-                { name: "Østerbro", lat: 55.7072, lng: 12.5792 },
-                { name: "Nørrebro", lat: 55.6950, lng: 12.5480 },
-                { name: "Vesterbro / Kgs. Enghave", lat: 55.6615, lng: 12.5410 },
-                { name: "Valby", lat: 55.6610, lng: 12.5080 },
-                { name: "Vanløse", lat: 55.6878, lng: 12.4870 },
-                { name: "Brønshøj-Husum", lat: 55.7065, lng: 12.4880 },
-                { name: "Bispebjerg / Nordvest", lat: 55.7145, lng: 12.5290 },
-                { name: "Amager Øst", lat: 55.6575, lng: 12.6185 },
-                { name: "Amager Vest", lat: 55.6435, lng: 12.5785 },
-                { name: "Frederiksberg", lat: 55.6794, lng: 12.5347 }
-            ],
-            mountain: [
-                { name: "Gyldenløves Høj (126 m)", lat: 55.5458, lng: 11.8564 },
-                { name: "Maglehøj i Frederiksværk (91 m)", lat: 55.9781, lng: 12.0542 },
-                { name: "Søllerød Kirkeskov / Geels Bakke (86 m)", lat: 55.8122, lng: 12.4889 },
-                { name: "Herstedhøje i Albertslund (67 m)", lat: 55.6844, lng: 12.3653 },
-                { name: "Bellahøj (37 m)", lat: 55.7025, lng: 12.5131 },
-                { name: "Valby Bakke / Frederiksberg Bakke (31 m)", lat: 55.6717, lng: 12.5256 },
-                { name: "Amager Bakke / CopenHill (85 m)", lat: 55.6844, lng: 12.6203 }
-            ],
-            park: [
-                { name: "Fælledparken", lat: 55.7011, lng: 12.5686 },
-                { name: "Frederiksberg Have", lat: 55.6744, lng: 12.5258 },
-                { name: "Kongens Have", lat: 55.6850, lng: 12.5792 },
-                { name: "Ørstedsparken", lat: 55.6811, lng: 12.5664 },
-                { name: "Botanisk Have", lat: 55.6869, lng: 12.5739 },
-                { name: "Amager Strandpark", lat: 55.6547, lng: 12.6461 },
-                { name: "Jægersborg Dyrehave", lat: 55.7928, lng: 12.5714 },
-                { name: "Bernstorffsparken", lat: 55.7586, lng: 12.5514 },
-                { name: "Utterslev Mose", lat: 55.7186, lng: 12.5025 },
-                { name: "Valbyparken", lat: 55.6397, lng: 12.5194 },
-                { name: "Damhusengen / Damhussøen", lat: 55.6778, lng: 12.4733 },
-                { name: "Slotsparken i Hillerød", lat: 55.9369, lng: 12.3014 },
-                { name: "Byparken i Roskilde", lat: 55.6439, lng: 12.0758 }
-            ],
-            amusement_park: [
-                { name: "Tivoli (København)", lat: 55.6737, lng: 12.5681 },
-                { name: "Dyrehavsbakken (Bakken)", lat: 55.7756, lng: 12.5750 },
-                { name: "BonBon-Land", lat: 55.2614, lng: 11.8642 }
-            ],
-            zoo: [
-                { name: "København Zoo (Frederiksberg)", lat: 55.6725, lng: 12.5214 },
-                { name: "Nordsjællands Fuglepark", lat: 56.0467, lng: 12.2889 }
-            ],
-            aquarium: [
-                { name: "Den Blå Planet (Kastrup)", lat: 55.6381, lng: 12.6561 },
-                { name: "Øresundsakvariet (Helsingør)", lat: 56.0389, lng: 12.6156 }
-            ],
-            golf_course: [
-                { name: "Royal Golf Club (Ørestad/Amager)", lat: 55.6361, lng: 12.5694 },
-                { name: "Københavns Golf Klub (Dyrehaven)", lat: 55.7889, lng: 12.5639 },
-                { name: "Brøndby Golfklub", lat: 55.6425, lng: 12.4047 },
-                { name: "Smørum Golfcenter", lat: 55.7369, lng: 12.2986 },
-                { name: "Rungsted Golf Klub", lat: 55.8819, lng: 12.5247 },
-                { name: "Roskilde Golf Klub", lat: 55.6228, lng: 12.0556 },
-                { name: "Hillerød Golf Klub", lat: 55.9153, lng: 12.2681 },
-                { name: "Køge Golf Klub", lat: 55.4375, lng: 12.1922 }
-            ],
-            museum: [
-                { name: "Nationalmuseet", lat: 55.6747, lng: 12.5747 },
-                { name: "Statens Museum for Kunst (SMK)", lat: 55.6886, lng: 12.5783 },
-                { name: "Ny Carlsberg Glyptotek", lat: 55.6725, lng: 12.5722 },
-                { name: "Experimentarium (Hellerup)", lat: 55.7275, lng: 12.5769 },
-                { name: "Arken Museum for Moderne Kunst (Ishøj)", lat: 55.6061, lng: 12.3875 },
-                { name: "Louisiana Museum of Modern Art (Humlebæk)", lat: 55.9694, lng: 12.5425 },
-                { name: "Frilandsmuseet (Lyngby)", lat: 55.7867, lng: 12.4925 },
-                { name: "Vikingeskibsmuseet (Roskilde)", lat: 55.6508, lng: 12.0806 },
-                { name: "Frederiksborg Slot / Nationalhistorisk Museum (Hillerød)", lat: 55.9350, lng: 12.3011 },
-                { name: "Kronborg Slot (Helsingør)", lat: 56.0392, lng: 12.6217 },
-                { name: "Heerup Museum (Rødovre)", lat: 55.6808, lng: 12.4561 }
-            ],
-            movie_theater: [
-                { name: "Imperial Bio (Vesterport)", lat: 55.6756, lng: 12.5614 },
-                { name: "Palads Teatret (Axeltorv)", lat: 55.6761, lng: 12.5647 },
-                { name: "Vue Fisketorvet Bio", lat: 55.6625, lng: 12.5619 },
-                { name: "Nordisk Film Biografer Field's", lat: 55.6308, lng: 12.5775 },
-                { name: "Falkoner Biograf (Frederiksberg)", lat: 55.6803, lng: 12.5333 },
-                { name: "Empire Bio (Nørrebro)", lat: 55.6914, lng: 12.5561 },
-                { name: "Atlas Biograferne (Rødovre Centrum)", lat: 55.6775, lng: 12.4553 },
-                { name: "Kinopalæet (Lyngby)", lat: 55.7697, lng: 12.5036 },
-                { name: "BIG Bio Herlev", lat: 55.7200, lng: 12.4403 },
-                { name: "Nordisk Film Biografer Waves (Hundige)", lat: 55.6003, lng: 12.3311 },
-                { name: "Kino Ro's Torv (Roskilde)", lat: 55.6408, lng: 12.0997 },
-                { name: "Nordisk Film Biografer Hillerød", lat: 55.9289, lng: 12.3008 }
-            ],
-            hospital: [
-                { name: "Rigshospitalet (Blegdamsvej)", lat: 55.6961, lng: 12.5667 },
-                { name: "Bispebjerg Hospital", lat: 55.7131, lng: 12.5219 },
-                { name: "Hvidovre Hospital", lat: 55.6478, lng: 12.4706 },
-                { name: "Amager Hospital", lat: 55.6503, lng: 12.6156 },
-                { name: "Herlev Hospital", lat: 55.7314, lng: 12.4422 },
-                { name: "Gentofte Hospital", lat: 55.7436, lng: 12.5439 },
-                { name: "Glostrup Hospital", lat: 55.6714, lng: 12.3878 },
-                { name: "Nordsjællands Hospital (Hillerød)", lat: 55.9186, lng: 12.3156 },
-                { name: "Sjællands Universitetshospital (Roskilde)", lat: 55.6331, lng: 12.0967 },
-                { name: "Sjællands Universitetshospital (Køge)", lat: 55.4856, lng: 12.1708 }
-            ],
-            library: [
-                { name: "Københavns Hovedbibliotek (Krystalgade)", lat: 55.6808, lng: 12.5733 },
-                { name: "Den Sorte Diamant (Det Kgl. Bibliotek)", lat: 55.6736, lng: 12.5825 },
-                { name: "Frederiksberg Hovedbibliotek", lat: 55.6797, lng: 12.5319 },
-                { name: "Rødovre Hovedbibliotek", lat: 55.6794, lng: 12.4558 },
-                { name: "Hvidovre Hovedbibliotek", lat: 55.6422, lng: 12.4758 },
-                { name: "Gentofte Hovedbibliotek", lat: 55.7478, lng: 12.5711 },
-                { name: "Stadsbiblioteket i Lyngby", lat: 55.7717, lng: 12.5028 },
-                { name: "Gladsaxe Hovedbibliotek", lat: 55.7453, lng: 12.4939 },
-                { name: "Roskilde Bibliotek", lat: 55.6414, lng: 12.0856 },
-                { name: "Hillerød Bibliotek", lat: 55.9297, lng: 12.3119 },
-                { name: "Kulturværftet Bibliotek (Helsingør)", lat: 56.0369, lng: 12.6139 },
-                { name: "Køge Bibliotek", lat: 55.4567, lng: 12.1808 }
-            ],
-            consulate: [
-                { name: "USA's Ambassade (Dag Hammarskjölds Allé)", lat: 55.6967, lng: 12.5839 },
-                { name: "Tysklands Ambassade (Stockholmsgade)", lat: 55.6914, lng: 12.5819 },
-                { name: "Frankrigs Ambassade (Kongens Nytorv)", lat: 55.6797, lng: 12.5869 },
-                { name: "Sveriges Ambassade (Sankt Annæ Plads)", lat: 55.6817, lng: 12.5928 },
-                { name: "Storbritanniens Ambassade (Kastelsvej)", lat: 55.6969, lng: 12.5889 },
-                { name: "Japans Ambassade (Havneholmen)", lat: 55.6625, lng: 12.5656 }
-            ],
-            coastline: [
-                { name: "Helsingør Kyst", lat: 56.035, lng: 12.618 },
-                { name: "Hornbæk Kyst", lat: 56.092, lng: 12.458 },
-                { name: "Gilleleje Kyst", lat: 56.128, lng: 12.307 },
-                { name: "Tisvildeleje Kyst", lat: 56.062, lng: 12.078 },
-                { name: "Humlebæk Kyst", lat: 55.965, lng: 12.542 },
-                { name: "Rungsted Kyst", lat: 55.884, lng: 12.548 },
-                { name: "Vedbæk Kyst", lat: 55.852, lng: 12.572 },
-                { name: "Bellevue / Klampenborg Kyst", lat: 55.778, lng: 12.593 },
-                { name: "Hellerup Strand", lat: 55.732, lng: 12.582 },
-                { name: "Nordhavn / Langelinie Kyst", lat: 55.702, lng: 12.602 },
-                { name: "Amager Strand", lat: 55.656, lng: 12.648 },
-                { name: "Kastrup / Dragør Kyst", lat: 55.595, lng: 12.675 },
-                { name: "Kalvebod Fælled Kyst", lat: 55.588, lng: 12.532 },
-                { name: "Hvidovre / Kalveboderne Kyst", lat: 55.618, lng: 12.478 },
-                { name: "Brøndby Strand Kyst", lat: 55.612, lng: 12.425 },
-                { name: "Ishøj / Hundige Strand", lat: 55.595, lng: 12.355 },
-                { name: "Greve / Mosede Strand", lat: 55.565, lng: 12.275 },
-                { name: "Solrød Strand Kyst", lat: 55.525, lng: 12.225 },
-                { name: "Køge Bugt / Køge Kyst", lat: 55.458, lng: 12.195 },
-                { name: "Roskilde Fjord (Roskilde Havn)", lat: 55.652, lng: 12.080 },
-                { name: "Roskilde Fjord (Jyllinge)", lat: 55.755, lng: 12.100 },
-                { name: "Roskilde Fjord (Frederikssund)", lat: 55.835, lng: 12.055 }
-            ],
-            body_of_water: [
-                { name: "Søerne i København (Peblinge Sø)", lat: 55.685, lng: 12.560 },
-                { name: "Damhussøen (Rødovre/Vanløse)", lat: 55.678, lng: 12.479 },
-                { name: "Utterslev Mose", lat: 55.718, lng: 12.502 },
-                { name: "Gentofte Sø", lat: 55.748, lng: 12.538 },
-                { name: "Lyngby Sø", lat: 55.774, lng: 12.488 },
-                { name: "Bagsværd Sø", lat: 55.772, lng: 12.456 },
-                { name: "Furesøen", lat: 55.798, lng: 12.412 },
-                { name: "Sjælsø", lat: 55.862, lng: 12.448 },
-                { name: "Esrum Sø", lat: 55.995, lng: 12.375 },
-                { name: "Arresø", lat: 55.975, lng: 12.115 },
-                { name: "Københavns Havneløb", lat: 55.672, lng: 12.582 },
-                { name: "Amager Strand / Øresund", lat: 55.656, lng: 12.648 },
-                { name: "Kalveboderne (Hvidovre)", lat: 55.618, lng: 12.478 },
-                { name: "Vallensbæk Sø", lat: 55.619, lng: 12.382 },
-                { name: "Køge Bugt", lat: 55.580, lng: 12.310 },
-                { name: "Roskilde Fjord", lat: 55.652, lng: 12.080 }
-            ],
-            international_border: [
-                { name: "Øresundsgrænsen (Helsingør–Helsingborg)", lat: 56.038, lng: 12.652 },
-                { name: "Øresundsgrænsen (Ven Nord)", lat: 55.930, lng: 12.660 },
-                { name: "Øresundsgrænsen (Midt Øresund)", lat: 55.800, lng: 12.740 },
-                { name: "Øresundsgrænsen (Peberholm / Øresundsbroen)", lat: 55.595, lng: 12.785 },
-                { name: "Øresundsgrænsen (Drogden Syd)", lat: 55.480, lng: 12.720 }
-            ],
-            admin_border_1: [
-                { name: "Regionsgrænse (Roskilde/Egedal)", lat: 55.715, lng: 12.165 },
-                { name: "Regionsgrænse (Høje-Taastrup/Roskilde)", lat: 55.645, lng: 12.195 },
-                { name: "Regionsgrænse (Ishøj/Greve)", lat: 55.602, lng: 12.322 }
-            ]
+        // Komprimerer billeder til hurtig overførsel i Foto-spørgsmål
+        const compressImageToBase64 = (file, maxWidth = 720, quality = 0.72) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const scale = Math.min(1, maxWidth / img.width);
+                        const canvas = document.createElement('canvas');
+                        canvas.width = Math.round(img.width * scale);
+                        canvas.height = Math.round(img.height * scale);
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    };
+                    img.onerror = reject;
+                    img.src = ev.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
         };
 
         // ============================================================================
-        // DE OFFICIELLE SPØRGSMÅL FRA JET LAG: THE GAME — HIDE AND SEEK REGELBOGEN
+        // JET LAG: THE GAME RETRO VECTOR LOGO COMPONENT (MATCHES IMAGE 1)
         // ============================================================================
-        const OFFICIAL_RADAR_DISTANCES = [
-            { label: "1/4 Mile (400 m)", km: 0.402 },
-            { label: "1/2 Mile (800 m)", km: 0.805 },
-            { label: "1 Mile (1,6 km)", km: 1.609 },
-            { label: "3 Miles (4,8 km)", km: 4.828 },
-            { label: "5 Miles (8,0 km)", km: 8.047 },
-            { label: "10 Miles (16,1 km)", km: 16.093 },
-            { label: "25 Miles (40,2 km)", km: 40.234 },
-            { label: "50 Miles (80,5 km)", km: 80.467 },
-            { label: "100 Miles (160,9 km)", km: 160.934 }
-        ];
-
-        const OFFICIAL_THERMOMETER_DISTANCES = [
-            { label: "1/2 Mile (800 m) — Small/Medium", km: 0.805 },
-            { label: "3 Miles (4,8 km) — Small/Medium", km: 4.828 },
-            { label: "10 Miles (16,1 km) — Medium/Large", km: 16.093 },
-            { label: "50 Miles (80,5 km) — Large", km: 80.467 }
-        ];
-
-        // Alle 20 officielle MATCHING spørgsmål ("Is your nearest ___ the same as my ___?")
-        const OFFICIAL_MATCHING_QUESTIONS = [
-            { id: 'lufthavn', group: 'Transit', label: '✈️ Commercial Airport (Kommerciel Lufthavn)', mode: 'voronoi' },
-            { id: 'transit_line', group: 'Transit', label: '🚆 Transit Line (Samme Tog-/Metrolinje)', mode: 'line_match' },
-            { id: 'station_length', group: 'Transit', label: '🔤 Station\'s Name Length (Længde på stationsnavn)', mode: 'station_length' },
-            { id: 'street_path', group: 'Transit', label: '🛣️ Street or Path (Samme Gade eller Sti)', mode: 'manual' },
-            { id: 'admin_1', group: 'Administrative', label: '🗺️ 1st Admin Division (Region Hovedstaden / Sjælland)', mode: 'voronoi' },
-            { id: 'admin_2', group: 'Administrative', label: '🏛️ 2nd Admin Division (Landsdel)', mode: 'voronoi' },
-            { id: 'kommune', group: 'Administrative', label: '🏙️ 3rd Admin Division (Kommune)', mode: 'voronoi' },
-            { id: 'bydel', group: 'Administrative', label: '🏘️ 4th Admin Division (Bydel / Kvarter)', mode: 'voronoi' },
-            { id: 'mountain', group: 'Natural', label: '⛰️ Mountain / Hill (Nærmeste Bakketop)', mode: 'voronoi' },
-            { id: 'landmass', group: 'Natural', label: '🏝️ Landmass (Samme Ø / Landmasse: Sjælland vs. Amager)', mode: 'landmass' },
-            { id: 'park', group: 'Natural', label: '🌳 Park (Nærmeste Park)', mode: 'voronoi' },
-            { id: 'amusement_park', group: 'Places of Interest', label: '🎡 Amusement Park (Forlystelsespark)', mode: 'voronoi' },
-            { id: 'zoo', group: 'Places of Interest', label: '🦁 Zoo (Zoologisk Have)', mode: 'voronoi' },
-            { id: 'aquarium', group: 'Places of Interest', label: '🐠 Aquarium (Akvarium)', mode: 'voronoi' },
-            { id: 'golf_course', group: 'Places of Interest', label: '⛳ Golf Course (Golfbane)', mode: 'voronoi' },
-            { id: 'museum', group: 'Places of Interest', label: '🏛️ Museum (Museum)', mode: 'voronoi' },
-            { id: 'movie_theater', group: 'Places of Interest', label: '🍿 Movie Theater (Biograf)', mode: 'voronoi' },
-            { id: 'hospital', group: 'Public Utilities', label: '🏥 Hospital (Hospital / Sygehus)', mode: 'voronoi' },
-            { id: 'library', group: 'Public Utilities', label: '📚 Library (Bibliotek)', mode: 'voronoi' },
-            { id: 'consulate', group: 'Public Utilities', label: '🏳️ Foreign Consulate (Ambassade / Konsulat)', mode: 'voronoi' }
-        ];
-
-        // Alle 20 officielle MEASURING spørgsmål ("Compared to me, are you closer to or further from ___?")
-        const OFFICIAL_MEASURING_QUESTIONS = [
-            { id: 'lufthavn', group: 'Transit', label: '✈️ Commercial Airport (Kommerciel Lufthavn)' },
-            { id: 'high_speed_line', group: 'Transit', label: '🚄 High-Speed Train Line (Højhastigheds-/Fjerntogslinje)' },
-            { id: 'station', group: 'Transit', label: '🚆 Rail Station (Tog- eller Metrostation)' },
-            { id: 'international_border', group: 'Borders', label: '🛂 International Border (Landegrænse i Øresund)' },
-            { id: 'admin_border_1', group: 'Borders', label: '🗺️ 1st Admin Division Border (Regionsgrænse)' },
-            { id: 'kommune', group: 'Borders', label: '🏙️ 2nd Admin Division Border (Kommune-centrum)' },
-            { id: 'coastline', group: 'Natural', label: '🌊 Coastline (Kystlinje / Havet)' },
-            { id: 'body_of_water', group: 'Natural', label: '💧 Body of Water (Sø, Å, Kanal eller Hav)' },
-            { id: 'mountain', group: 'Natural', label: '⛰️ Mountain / Peak (Bakketop / Højdepunkt)' },
-            { id: 'park', group: 'Natural', label: '🌳 Park (Park)' },
-            { id: 'amusement_park', group: 'Places of Interest', label: '🎡 Amusement Park (Forlystelsespark)' },
-            { id: 'zoo', group: 'Places of Interest', label: '🦁 Zoo (Zoologisk Have)' },
-            { id: 'aquarium', group: 'Places of Interest', label: '🐠 Aquarium (Akvarium)' },
-            { id: 'golf_course', group: 'Places of Interest', label: '⛳ Golf Course (Golfbane)' },
-            { id: 'museum', group: 'Places of Interest', label: '🏛️ Museum (Museum)' },
-            { id: 'movie_theater', group: 'Places of Interest', label: '🍿 Movie Theater (Biograf)' },
-            { id: 'hospital', group: 'Public Utilities', label: '🏥 Hospital (Hospital)' },
-            { id: 'library', group: 'Public Utilities', label: '📚 Library (Bibliotek)' },
-            { id: 'consulate', group: 'Public Utilities', label: '🏳️ Foreign Consulate (Ambassade / Konsulat)' }
-        ];
-
-        // Alle 8 officielle TENTACLES spørgsmål ("Within X miles of me, which Y are you nearest to?")
-        const OFFICIAL_TENTACLE_QUESTIONS = [
-            { id: 'museum_1m', cat: 'museum', radiusKm: 1.609, label: '🏛️ Museums Within 1 Mile (1,6 km)', shortTitle: 'Museum' },
-            { id: 'library_1m', cat: 'library', radiusKm: 1.609, label: '📚 Libraries Within 1 Mile (1,6 km)', shortTitle: 'Bibliotek' },
-            { id: 'movie_1m', cat: 'movie_theater', radiusKm: 1.609, label: '🍿 Movie Theaters Within 1 Mile (1,6 km)', shortTitle: 'Biograf' },
-            { id: 'hospital_1m', cat: 'hospital', radiusKm: 1.609, label: '🏥 Hospitals Within 1 Mile (1,6 km)', shortTitle: 'Hospital' },
-            { id: 'metro_15m', cat: 'metro', radiusKm: 24.14, label: '🚇 Metro Stations Within 15 Miles (24,1 km)', shortTitle: 'Metrostation' },
-            { id: 'station_15m', cat: 'station', radiusKm: 24.14, label: '🚆 Rail Stations Within 15 Miles (24,1 km)', shortTitle: 'Togstation' },
-            { id: 'zoo_15m', cat: 'zoo', radiusKm: 24.14, label: '🦁 Zoos Within 15 Miles (24,1 km)', shortTitle: 'Zoo' },
-            { id: 'aquarium_15m', cat: 'aquarium', radiusKm: 24.14, label: '🐠 Aquariums Within 15 Miles (24,1 km)', shortTitle: 'Akvarium' },
-            { id: 'amusement_15m', cat: 'amusement_park', radiusKm: 24.14, label: '🎡 Amusement Parks Within 15 Miles (24,1 km)', shortTitle: 'Forlystelsespark' }
-        ];
-
-        // Alle 18 officielle PHOTO spørgsmål direkte fra Jet Lag: Hide and Seek regelbogen
-        const OFFICIAL_PHOTO_QUESTIONS = [
-            { id: 'photo_tree', size: 'Small', title: '🌳 A Tree (Et træ)', text: 'Send et billede af et træ. Hele træet fra rod til krone skal være synligt i billedrammen!' },
-            { id: 'photo_sky', size: 'Small', title: '☁️ The Sky (Himlen lige op)', text: 'Læg telefonen fladt på jorden og tag et billede direkte op mod himlen (ingen zoom)!' },
-            { id: 'photo_you', size: 'Small', title: '🤳 You (Selfie)', text: 'Tag en selfie med telefonen lodret, armen strakt helt ud og standard-linse (ingen zoom)!' },
-            { id: 'photo_widest_street', size: 'Small', title: '🛣️ Widest Street (Bredeste gade)', text: 'Send et billede af den bredeste gade i jeres zone. Begge sider af gaden skal være synlige!' },
-            { id: 'photo_tallest_sightline', size: 'Small', title: '🏢 Tallest Structure in Sightline (Højeste struktur i synslinje)', text: 'Send et billede af den højeste struktur I kan se fra jeres nuværende sted (top og begge sider skal være med, toppen i øverste 1/3)!' },
-            { id: 'photo_any_building_station', size: 'Small', title: '🏠 Any Building Visible from Station (Bygning fra station)', text: 'Stå direkte ude foran stationsindgangen og tag et billede af en bygning (tag og begge sider skal være synlige)!' },
-            { id: 'photo_tallest_station', size: 'Medium', title: '🏙️ Tallest Building Visible from Station (Højeste bygning fra station)', text: 'Stå direkte ude foran stationsindgangen og tag et billede af den højeste synlige bygning (top i øverste 1/3)!' },
-            { id: 'photo_trace_street', size: 'Medium', title: '✏️ Trace Nearest Street/Path (Optegn nærmeste gade)', text: 'Send en optegning af jeres nærmeste gade/sti fra kryds til kryds (uden gadenavne)!' },
-            { id: 'photo_two_buildings', size: 'Medium', title: '🏘️ Two Buildings (To bygninger)', text: 'Send et billede af to bygninger ved siden af hinanden (fra bunden og op til 4. etage)!' },
-            { id: 'photo_restaurant', size: 'Medium', title: '🍽️ Restaurant Interior (Indenfor i en restaurant)', text: 'Tag et billede udefra ind gennem vinduet til en restaurant i jeres zone (ingen zoom)!' },
-            { id: 'photo_platform', size: 'Medium', title: '🚆 Train Platform (Togperronen)', text: 'Send et billede af et 1,5 x 1,5 m udsnit på togperronen med 3 tydelige elementer (uden stationsnavn)!' },
-            { id: 'photo_park', size: 'Medium', title: '🌲 Park (En park)', text: 'Tag et billede i en park uden zoom, telefonen vinkelret på jorden, mindst 1,5 m fra forhindringer!' },
-            { id: 'photo_grocery', size: 'Medium', title: '🛒 Grocery Store Aisle (Supermarkedsgang)', text: 'Stå for enden af en gang i et supermarked og skyd direkte ned ad gangen (ingen zoom)!' },
-            { id: 'photo_worship', size: 'Medium', title: '⛪ Place of Worship (Kirke / Religiøst sted)', text: 'Send et billede af et 1,5 x 1,5 m udsnit af en kirke/religiøst sted med 3 tydelige elementer!' },
-            { id: 'photo_half_mile_streets', size: 'Large', title: '🗺️ 1/2 Mile Streets Traced (800 m gader optegnet)', text: 'Optegn 800 meter sammenhængende gader med mindst 5 sving (nord-syd orienteret, uden gadenavne)!' },
-            { id: 'photo_mountain_station', size: 'Large', title: '⛰️ Tallest Mountain/Hill from Station (Højeste bakke fra station)', text: 'Tag et billede af det højeste punkt/bakke synligt fra stationen (max 3x zoom, toppen i øverste 1/3)!' },
-            { id: 'photo_water_zone', size: 'Large', title: '🌊 Biggest Body of Water in Zone (Største vandområde)', text: 'Send et billede af det største vandområde i jeres zone (max 3x zoom, begge bredder eller horisont synlig)!' },
-            { id: 'photo_five_buildings', size: 'Large', title: '🌇 Five Buildings (Fem bygninger)', text: 'Send et billede af fem bygninger på række (fra bunden op til 4. etage)!' }
-        ];
-
-        // Map tile servers that NEVER require an API key (even when opened via file:// in Chrome!)
-        const FREE_TILE_SERVERS = [
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-            "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        ];
-
         const JetLagLogo = ({ size = "large" }) => {
-            const isSmall = size === "small";
+            const isLarge = size === "large";
             return (
-                <div className={`flex flex-col items-center select-none ${isSmall ? 'scale-75' : ''}`}>
-                    {!isSmall && (
-                        <svg viewBox="0 0 240 165" className="w-44 h-32 mb-2 drop-shadow-xl">
-                            <path d="M 24 115 A 96 96 0 0 1 216 115 Z" fill="#ECECE4" />
-                            <path d="M 25 115 L 76 115 C 82 115 86 111 86 104 L 86 78 L 100 72 L 100 108 C 100 122 90 130 75 130 L 28 130 Z" fill="#F3B229" />
-                            <path d="M 28 130 L 75 130 C 90 130 100 122 100 108 L 100 72 L 108 68 L 108 112 C 108 132 95 144 74 144 L 32 144 Z" fill="#E5762B" />
-                            <path d="M 32 144 L 74 144 C 95 144 108 132 108 112 L 108 68 L 114 65 L 114 116 C 114 142 98 158 72 158 L 37 158 Z" fill="#DB3832" />
-                            <path d="M 215 115 L 164 115 C 158 115 154 111 154 104 L 154 78 L 140 72 L 140 108 C 140 122 150 130 165 130 L 212 130 Z" fill="#F3B229" />
-                            <path d="M 212 130 L 165 130 C 150 130 140 122 140 108 L 140 72 L 132 68 L 132 112 C 132 132 145 144 166 144 L 208 144 Z" fill="#E5762B" />
-                            <path d="M 208 144 L 166 144 C 145 144 132 132 132 112 L 132 68 L 126 65 L 126 116 C 126 142 142 158 168 158 L 203 158 Z" fill="#DB3832" />
-                            <path d="M 120 12 C 125 12 128 20 128 32 L 128 54 L 166 74 L 166 86 L 128 73 L 128 116 L 112 116 L 112 73 L 74 86 L 74 74 L 112 54 L 112 32 C 112 20 115 12 120 12 Z" fill="#1B2634" />
-                        </svg>
-                    )}
+                <div className="flex flex-col items-center select-none">
+                    {/* Retro Half-Dome with Plane & 3 Warm Exhaust Stripes */}
+                    <svg
+                        viewBox="0 0 240 140"
+                        className={isLarge ? "w-44 sm:w-52 h-auto drop-shadow-xl" : "w-28 h-auto"}
+                    >
+                        <defs>
+                            <clipPath id="domeClip">
+                                <path d="M 20 130 A 100 100 0 0 1 220 130 Z" />
+                            </clipPath>
+                        </defs>
 
-                    <div className="relative inline-flex items-center">
-                        <div className="border-[3.5px] border-jl-cream rounded-2xl px-6 py-1.5 bg-jl-navy shadow-lg">
-                            <span className="font-display font-black text-4xl sm:text-5xl tracking-wider text-jl-cream uppercase leading-none">
+                        {/* Cream Half-Dome Background */}
+                        <path d="M 20 130 A 100 100 0 0 1 220 130 Z" fill="#ECECE4" />
+
+                        <g clipPath="url(#domeClip)">
+                            {/* Left Retro Exhaust Curves (Yellow -> Orange -> Red) */}
+                            <path d="M 96 68 L 96 90 Q 96 104 78 104 L 10 104 L 10 132 L 108 132 L 108 68 Z" fill="#F3B229" />
+                            <path d="M 84 74 L 84 96 Q 84 114 68 114 L 10 114 L 10 132 L 108 132 L 108 74 Z" fill="#E5762B" />
+                            <path d="M 72 80 L 72 104 Q 72 122 56 122 L 10 122 L 10 132 L 108 132 L 108 80 Z" fill="#DB3832" />
+
+                            {/* Right Retro Exhaust Curves (Yellow -> Orange -> Red) */}
+                            <path d="M 144 68 L 144 90 Q 144 104 162 104 L 230 104 L 230 132 L 132 132 L 132 68 Z" fill="#F3B229" />
+                            <path d="M 156 74 L 156 96 Q 156 114 172 114 L 230 114 L 230 132 L 132 132 L 132 74 Z" fill="#E5762B" />
+                            <path d="M 168 80 L 168 104 Q 168 122 184 122 L 230 122 L 230 132 L 132 132 L 132 80 Z" fill="#DB3832" />
+
+                            {/* Center Navy Gap & Jet Silhouette */}
+                            <rect x="108" y="65" width="24" height="70" fill="#1B2634" />
+                            <path
+                                d="M 120 14 C 126 14 129 22 129 32 L 129 46 L 172 70 L 172 82 L 129 66 L 129 135 L 111 135 L 111 66 L 68 82 L 68 70 L 111 46 L 111 32 C 111 22 114 14 120 14 Z"
+                                fill="#1B2634"
+                            />
+                        </g>
+                    </svg>
+
+                    {/* "JET LAG" Framed Title + Slanted Yellow "THE GAME" Badge */}
+                    <div className="relative -mt-1">
+                        <div className="border-[3.5px] border-jl-cream rounded-2xl px-6 sm:px-8 py-1.5 bg-jl-navy shadow-xl">
+                            <span className="font-display font-black text-4xl sm:text-5xl tracking-wider text-jl-cream uppercase">
                                 JET LAG
                             </span>
                         </div>
-                        <div className="absolute -bottom-3.5 -right-4 bg-jl-yellow text-jl-navy font-display font-black text-sm sm:text-base px-3 py-0.5 rounded-md uppercase tracking-wider jl-slanted-badge border-2 border-jl-navy">
+                        <div className="absolute -bottom-3.5 -right-3 bg-jl-yellow text-jl-navy font-display font-black text-sm sm:text-base uppercase tracking-wider px-3 py-0.5 rounded-lg border-2 border-jl-navy jl-slanted-badge">
                             THE GAME
                         </div>
                     </div>
@@ -988,133 +1412,39 @@
             );
         };
 
-        const getNearestPOI = (lat, lng, categoryList) => {
-            if (!categoryList || categoryList.length === 0) return null;
-            const pt = turf.point([lng, lat]);
-            let best = null;
-            let minDist = Infinity;
-            categoryList.forEach((item, index) => {
-                const d = turf.distance(pt, turf.point([item.lng, item.lat]), { units: 'kilometers' });
-                if (d < minDist) {
-                    minDist = d;
-                    best = { ...item, index, distanceKm: d };
-                }
-            });
-            return best;
-        };
+        // ============================================================================
+        // AUTOMATISK OPRYDNING AF INAKTIVE PRIVATE RUM & VERIFIKATION
+        // ============================================================================
+        const INACTIVE_ROOM_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 timer uden aktivitet
+        const STALE_PLAYER_TIMEOUT_MS = 20 * 60 * 1000; // 20 min uden GPS/heartbeat
 
-        // Compress photo from camera/input to a fast, lightweight base64 JPEG (< 40KB for instant sync)
-        const compressImageToBase64 = (file) => {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        const maxDim = 480;
-                        let w = img.width;
-                        let h = img.height;
-                        if (w > h && w > maxDim) {
-                            h = Math.round((h * maxDim) / w);
-                            w = maxDim;
-                        } else if (h > maxDim) {
-                            w = Math.round((w * maxDim) / h);
-                            h = maxDim;
-                        }
-                        canvas.width = w;
-                        canvas.height = h;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, w, h);
-                        resolve(canvas.toDataURL('image/jpeg', 0.65));
-                    };
-                    img.onerror = reject;
-                    img.src = e.target.result;
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
-        };
-
-        // Hjælpefunktion: Laver et inverteret Polygon med WORLD_OUTER_RING som ydre ramme og huller indeni.
-        // Dette forhindrer 100% de skæve diagonale streger fra turf.difference ved lufthavne og cirkler!
-        const createInvertedHoleGeoJSON = (innerGeoJSON) => {
-            if (!innerGeoJSON || !innerGeoJSON.geometry) return null;
-            const geom = innerGeoJSON.geometry;
-            const holes = [];
-            if (geom.type === 'Polygon' && geom.coordinates.length > 0) {
-                holes.push(geom.coordinates[0]);
-            } else if (geom.type === 'MultiPolygon') {
-                geom.coordinates.forEach(polyCoords => {
-                    if (polyCoords && polyCoords.length > 0) holes.push(polyCoords[0]);
-                });
-            }
-            if (holes.length === 0) return null;
-            return turf.polygon([WORLD_OUTER_RING, ...holes]);
-        };
-
-        // Builds a GeoJSON Polygon/MultiPolygon for any map object (normal or inverted, Voronoi, Bisector, Station Length, Landmass!)
-        const buildExclusionGeoJSON = (obj) => {
+        const deleteEntireRoomByCode = async (targetRoomCode) => {
+            if (!targetRoomCode) return;
+            localActiveRoomsRegistry.delete(targetRoomCode);
             try {
-                if (obj.type === 'radius') {
-                    const circle = turf.circle([obj.lng, obj.lat], obj.radiusKm, { steps: 96, units: 'kilometers' });
-                    if (obj.invert) {
-                        return createInvertedHoleGeoJSON(circle);
-                    }
-                    return circle;
-                }
+                sessionStorage.removeItem(`jl_room_${targetRoomCode}`);
+            } catch (e) {}
 
-                if (obj.type === 'polygon' && obj.coords && obj.coords.length >= 3) {
-                    const ring = obj.coords.map(c => [c.lng, c.lat]);
-                    ring.push([obj.coords[0].lng, obj.coords[0].lat]);
-                    const poly = turf.polygon([ring]);
-                    if (obj.invert) {
-                        return createInvertedHoleGeoJSON(poly);
-                    }
-                    return poly;
-                }
+            if (!isCloudEnabled || !db) return;
 
-                if (obj.type === 'compound_radius' && obj.points && obj.points.length > 0) {
-                    const circles = obj.points.map(pt =>
-                        turf.circle([pt.lng, pt.lat], obj.radiusKm, { steps: 48, units: 'kilometers' })
-                    );
-                    let combined = circles[0];
-                    for (let i = 1; i < circles.length; i++) {
-                        try {
-                            const u = turf.union(combined, circles[i]);
-                            if (u) combined = u;
-                        } catch (e) {}
-                    }
-                    if (obj.invert) {
-                        return createInvertedHoleGeoJSON(combined);
-                    }
-                    return combined;
-                }
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', targetRoomCode));
 
-                // Eksakt Kilometer-Voronoi celle (fungerer fejfri for 2, 3 eller 40 lufthavne/stationer/museer!)
-                if (obj.type === 'voronoi_cell' && obj.points && obj.points.length > 1 && typeof obj.targetIdx === 'number') {
-                    const cellRing = computeExactVoronoiRingLngLat(obj.points, obj.targetIdx);
-                    if (cellRing) {
-                        if (obj.invert) {
-                            return turf.polygon([WORLD_OUTER_RING, cellRing]);
-                        }
-                        return turf.polygon([cellRing]);
-                    }
-                }
-
-                // Eksakt Kilometer-Termometer (100% vinkelret halveringslinje mellem A og B)
-                if (obj.type === 'thermometer' && obj.pointA && obj.pointB) {
-                    const halfRing = computeExactThermometerRingLngLat(obj.pointA, obj.pointB, obj.warmer);
-                    if (halfRing) {
-                        return turf.polygon([halfRing]);
-                    }
+                const colsToClean = ['players', 'mapObjects', 'questions', 'chat'];
+                for (const colName of colsToClean) {
+                    const colRef = collection(db, 'artifacts', appId, 'public', 'data', colName);
+                    // Vi henter dokumenter via onSnapshot-fri engangslæsning eller sletter kendte nøgler
+                    // Bemærk: Da getDocs ikke altid er nødvendigt hvis onSnapshot kører, importerer vi simpelt:
                 }
             } catch (err) {
-                console.warn("GeoJSON calculation warning:", err);
+                console.warn("Fejl ved sletning af rum:", err);
             }
-            return null;
         };
 
-        const LoginScreen = ({ onJoinRoom, isAuthenticating, isCloudActive }) => {
+        // ============================================================================
+        // LOGIN & ROOM CREATION / VERIFICATION SCREEN
+        // ============================================================================
+        const LoginScreen = ({ onJoinRoom, isAuthenticating, isCloudActive, roomError, onClearError }) => {
             const [name, setName] = useState("");
             const [mode, setMode] = useState("join"); // 'join' or 'create'
             const [roomCode, setRoomCode] = useState("");
@@ -1133,12 +1463,14 @@
             const handleSwitchToCreate = () => {
                 setMode("create");
                 setRoomCode(generateRandomCode());
+                if (onClearError) onClearError();
             };
 
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (!name.trim()) return;
-                const cleanCode = (roomCode || generateRandomCode()).trim().toUpperCase();
+                const cleanCode = (roomCode || (mode === 'create' ? generateRandomCode() : '')).trim().toUpperCase();
+                if (!cleanCode) return;
                 onJoinRoom({
                     playerName: name.trim(),
                     roomCode: cleanCode,
@@ -1148,14 +1480,14 @@
             };
 
             return (
-                <div className="h-full w-full bg-jl-navy flex flex-col items-center justify-center p-4 relative overflow-y-auto">
+                <div className="h-full w-full bg-jl-navy flex flex-col items-center justify-center p-3 sm:p-4 relative overflow-y-auto safe-top safe-bottom">
                     <div className="absolute inset-0 opacity-5 pointer-events-none"
                          style={{ backgroundImage: 'radial-gradient(#ECECE4 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }} />
 
-                    <div className="z-10 w-full max-w-md flex flex-col items-center my-auto py-4">
+                    <div className="z-10 w-full max-w-md flex flex-col items-center my-auto py-2 sm:py-4">
                         <JetLagLogo size="large" />
 
-                        <div className="mt-5 mb-4 flex flex-wrap items-center justify-center gap-2">
+                        <div className="mt-4 mb-3 flex flex-wrap items-center justify-center gap-2">
                             <span className="bg-jl-dark/90 border border-jl-cream/20 text-jl-yellow font-display font-bold uppercase tracking-widest px-3 py-1 rounded text-xs">
                                 HIDE & SEEK • ZONE 1–99 KBH
                             </span>
@@ -1168,39 +1500,58 @@
                                         : 'bg-jl-orange/20 border-jl-orange text-jl-yellow hover:bg-jl-orange/30'
                                 }`}
                             >
-                                {isCloudActive ? '☁️ Live Cloud Aktiv' : '⚙️ Lokal Tilstand (Klik for Firebase Guide)'}
+                                {isCloudActive ? '☁️ Mobil-Server Aktiv' : '📱 Mobil & Server Guide'}
                             </button>
                         </div>
 
-                        <form onSubmit={handleSubmit} className="w-full bg-jl-dark/95 border-2 border-jl-cream/25 rounded-3xl p-5 sm:p-6 shadow-2xl backdrop-blur-md">
+                        <form onSubmit={handleSubmit} className="w-full bg-jl-dark/95 border-2 border-jl-cream/25 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-md">
                             {/* Mode Tabs: Join Room vs Create Room */}
-                            <div className="grid grid-cols-2 gap-2 p-1 bg-jl-navy rounded-2xl mb-5 border border-jl-cream/15">
+                            <div className="grid grid-cols-2 gap-2 p-1 bg-jl-navy rounded-2xl mb-4 border border-jl-cream/15">
                                 <button
                                     type="button"
-                                    onClick={() => { setMode("join"); setRoomCode(""); }}
-                                    className={`py-2.5 rounded-xl font-display font-black uppercase tracking-wider text-base transition-all ${
+                                    onClick={() => { setMode("join"); setRoomCode(""); if (onClearError) onClearError(); }}
+                                    className={`py-2.5 rounded-xl font-display font-black uppercase tracking-wider text-sm sm:text-base transition-all ${
                                         mode === 'join'
                                             ? 'bg-jl-yellow text-jl-navy shadow'
                                             : 'text-jl-cream/70 hover:text-white'
                                     }`}
                                 >
-                                    🔑 DELTAG MED KODE
+                                    🔑 DELTAG I RUM
                                 </button>
                                 <button
                                     type="button"
                                     onClick={handleSwitchToCreate}
-                                    className={`py-2.5 rounded-xl font-display font-black uppercase tracking-wider text-base transition-all ${
+                                    className={`py-2.5 rounded-xl font-display font-black uppercase tracking-wider text-sm sm:text-base transition-all ${
                                         mode === 'create'
                                             ? 'bg-jl-green text-white shadow'
                                             : 'text-jl-cream/70 hover:text-white'
                                     }`}
                                 >
-                                    ➕ OPRET PRIVAT RUM
+                                    ➕ OPRET NYT RUM
                                 </button>
                             </div>
 
+                            {/* Error Banner if trying to join a non-existent or expired room */}
+                            {roomError && (
+                                <div className="mb-4 bg-jl-red/20 border-2 border-jl-red rounded-2xl p-3 text-jl-cream text-xs sm:text-sm font-bold flex items-start justify-between gap-2 animate-pulse">
+                                    <div>
+                                        <div className="font-display font-black text-base uppercase text-jl-red leading-tight">
+                                            🚫 RUMMET FINDES IKKE!
+                                        </div>
+                                        <div className="mt-0.5 text-jl-cream/90">{roomError}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleSwitchToCreate}
+                                        className="shrink-0 bg-jl-green text-white font-display font-black text-xs uppercase px-2.5 py-1.5 rounded-xl shadow"
+                                    >
+                                        Opret i stedet →
+                                    </button>
+                                </div>
+                            )}
+
                             {/* Player Name */}
-                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-base mb-1.5">
+                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-sm sm:text-base mb-1">
                                 1. DIT SPILLERNAVN
                             </label>
                             <input
@@ -1208,21 +1559,24 @@
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
                                 placeholder="F.eks. Sam, Ben, Adam..."
-                                className="w-full bg-jl-navy border-2 border-jl-cream/30 focus:border-jl-yellow rounded-xl px-4 py-3 text-jl-cream font-bold placeholder-jl-cream/35 focus:outline-none transition-colors mb-4"
+                                className="w-full bg-jl-navy border-2 border-jl-cream/30 focus:border-jl-yellow rounded-xl px-4 py-2.5 sm:py-3 text-jl-cream font-bold placeholder-jl-cream/35 focus:outline-none transition-colors mb-3.5 text-base"
                             />
 
                             {/* Room Code */}
-                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-base mb-1.5">
-                                {mode === 'create' ? '2. DIN NYE RUM-KODE (DEL MED VENNERNE)' : '2. INDTAST RUM-KODE'}
+                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-sm sm:text-base mb-1">
+                                {mode === 'create' ? '2. NY RUM-KODE (DEL MED VENNERNE)' : '2. INDTAST EKSISTERENDE RUM-KODE'}
                             </label>
-                            <div className="flex gap-2 mb-4">
+                            <div className="flex gap-2 mb-3.5">
                                 <input
                                     type="text"
                                     value={roomCode}
-                                    onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                                    placeholder="F.eks. JL492 eller KBH99"
+                                    onChange={(e) => {
+                                        setRoomCode(e.target.value.toUpperCase());
+                                        if (onClearError) onClearError();
+                                    }}
+                                    placeholder={mode === 'join' ? "Kræver aktiv rum-kode..." : "F.eks. JL492"}
                                     maxLength={8}
-                                    className="flex-1 bg-jl-navy border-2 border-jl-yellow/60 focus:border-jl-yellow rounded-xl px-4 py-3 text-jl-yellow font-display font-black text-2xl tracking-widest uppercase placeholder-jl-cream/25 focus:outline-none text-center"
+                                    className="flex-1 bg-jl-navy border-2 border-jl-yellow/60 focus:border-jl-yellow rounded-xl px-4 py-2.5 text-jl-yellow font-display font-black text-2xl tracking-widest uppercase placeholder-jl-cream/25 focus:outline-none text-center"
                                 />
                                 {mode === 'create' && (
                                     <button
@@ -1237,64 +1591,68 @@
                             </div>
 
                             {/* Automatic Team Assignment or Specific Team Choice */}
-                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-base mb-2">
+                            <label className="block font-display font-extrabold uppercase tracking-wider text-jl-cream text-sm sm:text-base mb-1.5">
                                 3. HOLD-TILDELING (BYTTER HVER RUNDE)
                             </label>
-                            <div className="grid grid-cols-3 gap-2 mb-5">
+                            <div className="grid grid-cols-3 gap-2 mb-4">
                                 <button
                                     type="button"
                                     onClick={() => setTeamPreference('auto')}
-                                    className={`p-2.5 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
+                                    className={`p-2 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
                                         teamPreference === 'auto'
                                             ? 'bg-jl-yellow/20 border-jl-yellow text-jl-cream scale-[1.02]'
                                             : 'bg-jl-navy/50 border-jl-cream/15 text-jl-cream/60'
                                     }`}
                                 >
-                                    <span className="text-lg">⚖️</span>
-                                    <span className="font-display font-black text-sm uppercase mt-0.5">AUTO-FORDEL</span>
-                                    <span className="text-[10px] leading-tight opacity-75">Balancerer holdene</span>
+                                    <span className="text-base">⚖️</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase mt-0.5">AUTO-FORDEL</span>
+                                    <span className="text-[9px] leading-tight opacity-75">Balancerer hold</span>
                                 </button>
 
                                 <button
                                     type="button"
                                     onClick={() => setTeamPreference('teamA')}
-                                    className={`p-2.5 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
+                                    className={`p-2 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
                                         teamPreference === 'teamA'
                                             ? 'bg-jl-green/20 border-jl-green text-jl-cream scale-[1.02]'
                                             : 'bg-jl-navy/50 border-jl-cream/15 text-jl-cream/60'
                                     }`}
                                 >
-                                    <span className="text-lg">🟢</span>
-                                    <span className="font-display font-black text-sm uppercase mt-0.5">HOLD 1 (ALPHA)</span>
-                                    <span className="text-[10px] leading-tight opacity-75">Starter som Gemmer</span>
+                                    <span className="text-base">🟢</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase mt-0.5">HOLD 1 (ALPHA)</span>
+                                    <span className="text-[9px] leading-tight opacity-75">Starter Gemmer</span>
                                 </button>
 
                                 <button
                                     type="button"
                                     onClick={() => setTeamPreference('teamB')}
-                                    className={`p-2.5 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
+                                    className={`p-2 rounded-xl border-2 flex flex-col items-center text-center transition-all ${
                                         teamPreference === 'teamB'
                                             ? 'bg-jl-orange/20 border-jl-orange text-jl-cream scale-[1.02]'
                                             : 'bg-jl-navy/50 border-jl-cream/15 text-jl-cream/60'
                                     }`}
                                 >
-                                    <span className="text-lg">🟠</span>
-                                    <span className="font-display font-black text-sm uppercase mt-0.5">HOLD 2 (BRAVO)</span>
-                                    <span className="text-[10px] leading-tight opacity-75">Starter som Finder</span>
+                                    <span className="text-base">🟠</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase mt-0.5">HOLD 2 (BRAVO)</span>
+                                    <span className="text-[9px] leading-tight opacity-75">Starter Finder</span>
                                 </button>
                             </div>
 
                             <button
                                 type="submit"
-                                disabled={!name.trim() || (!roomCode.trim() && mode === 'join') || isAuthenticating}
-                                className="w-full bg-jl-yellow hover:bg-amber-400 disabled:opacity-40 text-jl-navy font-display font-black text-2xl uppercase tracking-wider py-3.5 rounded-xl shadow-lg transition-transform active:scale-98 flex items-center justify-center gap-2"
+                                disabled={!name.trim() || !roomCode.trim() || isAuthenticating}
+                                className="w-full bg-jl-yellow hover:bg-amber-400 disabled:opacity-40 text-jl-navy font-display font-black text-xl sm:text-2xl uppercase tracking-wider py-3 rounded-xl shadow-lg transition-transform active:scale-98 flex items-center justify-center gap-2"
                             >
                                 {isAuthenticating
-                                    ? 'FORBINDER TIL RUM...'
+                                    ? 'TJEKKER RUM...'
                                     : mode === 'create'
-                                    ? `OPRET RUM (${roomCode || '...'}) →`
-                                    : `GÅ IND I RUM (${roomCode || '...'}) →`}
+                                    ? `OPRET PRIVAT RUM (${roomCode || '...'}) →`
+                                    : `FORBIND TIL RUM (${roomCode || '...'}) →`}
                             </button>
+
+                            <p className="mt-2.5 text-center text-[11px] text-jl-cream/55">
+                                🧹 Private rum der ikke længere er i brug ryddes automatisk.
+                            </p>
                         </form>
                     </div>
 
@@ -1361,26 +1719,71 @@
             // Synchronized Room State
             const [myTeam, setMyTeam] = useState(initialTeam || 'teamA'); // 'teamA' (Hold 1) or 'teamB' (Hold 2)
             const [players, setPlayers] = useState([]);
-            const [mapObjects, setMapObjects] = useState([]);
-            const [chatMessages, setChatMessages] = useState([]);
-            const [questionsLog, setQuestionsLog] = useState([]);
-            const [roomState, setRoomState] = useState({
-                roomCode,
-                roundNumber: 1,
-                hidingTeam: 'teamA',
-                phase: 'hiding',
-                timerEndMillis: Date.now() + 45 * 60 * 1000,
-                isRunning: false,
-                botHiderStationIdx: 11 // Default simulated hider at Hillerød/Lyngby if no human Hider in room
+            const [mapObjects, setMapObjects] = useState(() => {
+                try {
+                    const cached = sessionStorage.getItem(`jl_objects_${roomCode}`);
+                    return cached ? JSON.parse(cached) : [];
+                } catch (e) { return []; }
+            });
+            const [chatMessages, setChatMessages] = useState(() => {
+                try {
+                    const cached = sessionStorage.getItem(`jl_chat_${roomCode}`);
+                    return cached ? JSON.parse(cached) : [];
+                } catch (e) { return []; }
+            });
+            const [questionsLog, setQuestionsLog] = useState(() => {
+                try {
+                    const cached = sessionStorage.getItem(`jl_questions_${roomCode}`);
+                    return cached ? JSON.parse(cached) : [];
+                } catch (e) { return []; }
+            });
+            const [roomState, setRoomState] = useState(() => {
+                try {
+                    const cached = sessionStorage.getItem(`jl_room_${roomCode}`);
+                    if (cached) return JSON.parse(cached);
+                } catch (e) {}
+                return {
+                    roomCode,
+                    roundNumber: 1,
+                    hidingTeam: 'teamA',
+                    phase: 'hiding',
+                    timerEndMillis: Date.now() + 45 * 60 * 1000,
+                    isRunning: false,
+                    botHiderStationIdx: 11 // Default simulated hider at Hillerød/Lyngby if no human Hider in room
+                };
             });
 
             // Derived Role for current player in the current round!
             const myRole = myTeam === roomState.hidingTeam ? 'hider' : 'seeker';
 
+            // Opdater gemt session hvis spilleren skifter hold inde i rummet
+            useEffect(() => {
+                saveActiveSession({
+                    playerName,
+                    roomCode,
+                    initialTeam: myTeam
+                });
+            }, [playerName, roomCode, myTeam]);
+
+            // Gem lokale kopier i sessionStorage så intet går tabt ved F5 / side-opdatering
+            useEffect(() => {
+                try { sessionStorage.setItem(`jl_objects_${roomCode}`, JSON.stringify(mapObjects)); } catch (e) {}
+            }, [mapObjects, roomCode]);
+
+            useEffect(() => {
+                try { sessionStorage.setItem(`jl_questions_${roomCode}`, JSON.stringify(questionsLog)); } catch (e) {}
+            }, [questionsLog, roomCode]);
+
+            useEffect(() => {
+                try { sessionStorage.setItem(`jl_chat_${roomCode}`, JSON.stringify(chatMessages)); } catch (e) {}
+            }, [chatMessages, roomCode]);
+
             // Local UI & Map states
             const [mapTheme, setMapTheme] = useState('map-mint');
             const [showHubs, setShowHubs] = useState(true);
             const [soundMuted, setSoundMuted] = useState(false);
+            const [musicPlaying, setMusicPlaying] = useState(false);
+            const [wakeLockActive, setWakeLockActive] = useState(false);
             const [hiderShowSeekerZones, setHiderShowSeekerZones] = useState(false); // Hiders get a clean map by default!
             const [hiderLockedSpot, setHiderLockedSpot] = useState(null);
             const [activeTool, setActiveTool] = useState(null);
@@ -1451,6 +1854,88 @@
                 setTimeout(() => setStatusBanner(null), 5000);
             };
 
+            // Mobile Screen Wake Lock (Forhindrer at telefonen går i sort mens man løber rundt i København)
+            useEffect(() => {
+                let wakeLockSentinel = null;
+                const requestWakeLock = async () => {
+                    if ('wakeLock' in navigator) {
+                        try {
+                            wakeLockSentinel = await navigator.wakeLock.request('screen');
+                            setWakeLockActive(true);
+                            wakeLockSentinel.addEventListener('release', () => setWakeLockActive(false));
+                        } catch (e) {
+                            setWakeLockActive(false);
+                        }
+                    }
+                };
+                requestWakeLock();
+                const handleVisibilityChange = () => {
+                    if (document.visibilityState === 'visible') requestWakeLock();
+                };
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                return () => {
+                    document.removeEventListener('visibilitychange', handleVisibilityChange);
+                    if (wakeLockSentinel) wakeLockSentinel.release().catch(() => {});
+                    JetLagAudio.stopBackgroundMusic();
+                };
+            }, []);
+
+            // Room Activity Heartbeat + Auto-Delete Room when last player leaves
+            useEffect(() => {
+                if (!user || !roomCode) return;
+
+                const touchRoomActivity = async () => {
+                    const now = Date.now();
+                    localActiveRoomsRegistry.set(roomCode, { ...roomState, lastActiveMillis: now });
+                    try {
+                        sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify({ ...roomState, lastActiveMillis: now }));
+                    } catch (e) {}
+
+                    if (isCloudActive && db) {
+                        try {
+                            const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode);
+                            await updateDoc(roomDocRef, { lastActiveMillis: now }).catch(() => {});
+                        } catch (e) {}
+                    }
+                };
+
+                touchRoomActivity();
+                const hbInterval = setInterval(touchRoomActivity, 45000);
+                return () => clearInterval(hbInterval);
+            }, [user, roomCode, isCloudActive]);
+
+            // Explicit Leave & Auto-Cleanup if Room becomes Empty
+            const handleLeaveAndCleanupRoom = async () => {
+                JetLagAudio.stopBackgroundMusic();
+                clearActiveSession();
+                const remainingOtherPlayers = players.filter(p => p.uid !== user?.uid && (Date.now() - (p.updatedAtMillis || 0)) < STALE_PLAYER_TIMEOUT_MS);
+
+                if (isCloudActive && db && user) {
+                    try {
+                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'players', `${roomCode}_${user.uid}`));
+                        // Hvis der ikke er flere aktive spillere tilbage i rummet, rydder vi hele det private rum!
+                        if (remainingOtherPlayers.length === 0) {
+                            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode));
+                            for (const obj of mapObjects) {
+                                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'mapObjects', obj.id));
+                            }
+                            for (const q of questionsLog) {
+                                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'questions', q.id));
+                            }
+                            for (const m of chatMessages) {
+                                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'chat', m.id));
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("Cleanup warning:", e);
+                    }
+                } else if (remainingOtherPlayers.length === 0) {
+                    await deleteEntireRoomByCode(roomCode);
+                }
+
+                onLeaveRoom();
+            };
+
             useEffect(() => {
                 if (mapInstanceRef.current) return;
 
@@ -1464,9 +1949,10 @@
                     if (tileLayerRef.current) {
                         map.removeLayer(tileLayerRef.current);
                     }
+                    // Bemærk: Ingen crossOrigin-attribut her, da det udløser 403-blokering hos visse kortservere
                     const layer = L.tileLayer(url, {
                         maxZoom: 19,
-                        crossOrigin: true
+                        subdomains: ['a', 'b', 'c', 'd']
                     });
                     layer.on('tileerror', () => {
                         if (tileProviderIdxRef.current < FREE_TILE_SERVERS.length - 1) {
@@ -1609,18 +2095,14 @@
 
                 const unsubRoom = onSnapshot(roomDocRef, (snap) => {
                     if (snap.exists()) {
-                        setRoomState(snap.data());
+                        const data = snap.data();
+                        setRoomState(data);
+                        try { sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(data)); } catch (e) {}
                     } else {
-                        const initialRoom = {
-                            roomCode,
-                            roundNumber: 1,
-                            hidingTeam: 'teamA',
-                            phase: 'hiding',
-                            timerEndMillis: Date.now() + 45 * 60 * 1000,
-                            isRunning: true,
-                            botHiderStationIdx: 11
-                        };
-                        setDoc(roomDocRef, initialRoom).catch(e => console.warn(e));
+                        // Hvis rummet er blevet slettet/lukket fordi det ikke længere er i brug
+                        JetLagAudio.stopBackgroundMusic();
+                        clearActiveSession();
+                        onLeaveRoom("Rummet blev lukket, da det ikke længere var i brug.");
                     }
                 }, (err) => console.error("Room listener error:", err));
 
@@ -2893,82 +3375,75 @@
                         </div>
                     )}
 
-                    {/* TOP BROADCAST BAR (Jet Lag TV HUD Style) */}
-                    <div className="absolute top-0 left-0 right-0 z-[500] p-2.5 sm:p-3 pointer-events-none flex flex-wrap items-start justify-between gap-2">
-                        {/* Left: Room Code + Team & Automatic Role Badge */}
-                        <div className="pointer-events-auto flex items-center gap-2 bg-jl-navy border-2 border-jl-cream rounded-2xl px-3 py-1.5 shadow-xl">
-                            <button
-                                onClick={() => setActiveTool(activeTool === 'room' ? null : 'room')}
-                                className="bg-jl-dark border border-jl-yellow/50 px-2.5 py-1 rounded-xl text-left hover:border-jl-yellow transition-colors"
-                                title="Åbn Rum & Hold-oversigt"
-                            >
-                                <div className="text-[9px] font-display font-bold uppercase text-jl-cream/60 leading-none">
-                                    RUM • RUNDE {roomState.roundNumber || 1}
-                                </div>
-                                <div className="font-display font-black text-lg text-jl-yellow tracking-widest leading-tight">
-                                    🔑 {roomCode}
-                                </div>
-                            </button>
+                    {}
+                    {/* TOP BROADCAST BAR (Mobile-First Compact & Responsive Jet Lag TV HUD) */}
+                    <div className="absolute top-0 left-0 right-0 z-[500] px-2 pt-1.5 sm:p-3 safe-top pointer-events-none flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-1.5 sm:gap-2">
+                        {/* Top Row on Mobile: Room Code + Role + Timer in one sleek bar */}
+                        <div className="pointer-events-auto flex items-center justify-between gap-1.5 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl px-2.5 py-1.5 shadow-xl">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                                <button
+                                    onClick={() => setActiveTool(activeTool === 'room' ? null : 'room')}
+                                    className="bg-jl-dark border border-jl-yellow/50 px-2 py-1 rounded-xl text-left hover:border-jl-yellow transition-colors shrink-0"
+                                    title="Åbn Rum & Hold-oversigt"
+                                >
+                                    <div className="text-[8px] sm:text-[9px] font-display font-bold uppercase text-jl-cream/60 leading-none">
+                                        R{roomState.roundNumber || 1} • KODE
+                                    </div>
+                                    <div className="font-display font-black text-sm sm:text-lg text-jl-yellow tracking-wider leading-tight">
+                                        🔑 {roomCode}
+                                    </div>
+                                </button>
 
-                            <div className={`px-2.5 py-1 rounded font-display font-black text-xs sm:text-sm uppercase tracking-wider -rotate-2 border ${
-                                myRole === 'hider'
-                                    ? 'bg-jl-green text-white border-white'
-                                    : 'bg-jl-yellow text-jl-navy border-jl-navy'
-                            }`}>
-                                {myRole === 'hider' ? '🏃 GEMMER-INTERFACE' : '🔍 FINDER-INTERFACE'}
+                                <div className={`px-2 py-0.5 sm:py-1 rounded font-display font-black text-[11px] sm:text-sm uppercase tracking-wider -rotate-2 border shrink-0 ${
+                                    myRole === 'hider'
+                                        ? 'bg-jl-green text-white border-white'
+                                        : 'bg-jl-yellow text-jl-navy border-jl-navy'
+                                }`}>
+                                    {myRole === 'hider' ? '🏃 GEMMER' : '🔍 FINDER'}
+                                </div>
+
+                                <div className="hidden md:block pl-1 truncate">
+                                    <div className="font-display font-black text-sm text-jl-cream leading-none uppercase truncate">
+                                        {playerName} ({myTeam === 'teamA' ? 'Hold 1' : 'Hold 2'})
+                                    </div>
+                                    <div className="text-[10px] font-bold text-jl-cream/70 truncate">
+                                        {myRole === 'hider'
+                                            ? `Overvåger ${chasersWithDistance.length} finder(e)`
+                                            : activeHiderTarget.isBot
+                                            ? '🤖 Auto-Svar (Bot-Gemmer)'
+                                            : `📡 Forbundet til ${activeHiderTarget.name}`}
+                                    </div>
+                                </div>
                             </div>
 
-                            <div className="pr-1 hidden sm:block">
-                                <div className="font-display font-black text-base text-jl-cream leading-none uppercase">
-                                    {playerName} ({myTeam === 'teamA' ? 'Hold 1' : 'Hold 2'})
-                                </div>
-                                <div className="text-[10px] font-bold text-jl-cream/70">
-                                    {myRole === 'hider'
-                                        ? `Live overvågning af ${chasersWithDistance.length} finder(e)`
-                                        : activeHiderTarget.isBot
-                                        ? '🤖 Auto-Svar aktiv (Test Bot-Gemmer)'
-                                        : `📡 Auto-Svar forbundet til ${activeHiderTarget.name}`}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Center: 45-Min Hide Timer, Game Phase & "NY RUNDE / BYT HOLD" */}
-                        <div className="pointer-events-auto flex items-center gap-2 bg-jl-navy border-2 border-jl-cream rounded-2xl px-3 py-1.5 shadow-xl">
-                            <div className="flex flex-col">
-                                <span className="text-[10px] font-display font-black uppercase tracking-widest text-jl-yellow">
-                                    {roomState.phase === 'hiding' ? `⏱ GEMME-TID (RUNDE ${roomState.roundNumber || 1})` : `🚨 JAGTEN ER I GANG (RUNDE ${roomState.roundNumber || 1})`}
-                                </span>
-                                <span className="font-display font-black text-2xl sm:text-3xl text-jl-cream leading-none tracking-wider">
-                                    {roomState.phase === 'hiding' ? clockDisplay : 'JAGT AKTIV'}
-                                </span>
-                            </div>
-                            <div className="flex flex-col gap-1 ml-1.5">
-                                <div className="flex gap-1">
-                                    <button
-                                        onClick={handleStart45MinTimer}
-                                        className="bg-jl-green hover:bg-emerald-500 text-white font-display font-bold text-[11px] uppercase px-2 py-0.5 rounded shadow"
-                                    >
-                                        Start 45m
-                                    </button>
-                                    <button
-                                        onClick={handleTogglePhase}
-                                        className="bg-jl-orange hover:bg-amber-600 text-white font-display font-bold text-[11px] uppercase px-2 py-0.5 rounded shadow"
-                                    >
-                                        {roomState.phase === 'hiding' ? 'Start Jagt' : 'Gemme-tid'}
-                                    </button>
+                            {/* Compact Timer inside same bar on Mobile */}
+                            <div className="flex items-center gap-1.5 shrink-0 border-l border-jl-cream/20 pl-2">
+                                <div className="flex flex-col items-end">
+                                    <span className="text-[8px] sm:text-[10px] font-display font-black uppercase tracking-widest text-jl-yellow leading-none">
+                                        {roomState.phase === 'hiding' ? '⏱ GEMME-TID' : '🚨 JAGT AKTIV'}
+                                    </span>
+                                    <span className="font-display font-black text-xl sm:text-2xl text-jl-cream leading-none tracking-wider">
+                                        {roomState.phase === 'hiding' ? clockDisplay : 'JAGT'}
+                                    </span>
                                 </div>
                                 <button
-                                    onClick={handleNextRoundSwapTeams}
-                                    className="bg-jl-yellow hover:bg-amber-300 text-jl-navy font-display font-black text-[11px] uppercase px-2 py-0.5 rounded shadow tracking-wider"
-                                    title="Start næste runde og byt automatisk hvem der er Gemmer og Finder!"
+                                    onClick={handleTogglePhase}
+                                    className="bg-jl-orange hover:bg-amber-600 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
                                 >
-                                    🔄 Ny Runde (Byt Hold)
+                                    {roomState.phase === 'hiding' ? 'Start Jagt' : '45m Ur'}
+                                </button>
+                                <button
+                                    onClick={handleNextRoundSwapTeams}
+                                    className="bg-jl-yellow hover:bg-amber-300 text-jl-navy font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
+                                    title="Start ny runde og byt hold"
+                                >
+                                    🔄 Runde
                                 </button>
                             </div>
                         </div>
 
-                        {/* Right: Map Theme, Zone 1-99 Hubs & GPS Simulator Toggle */}
-                        <div className="pointer-events-auto flex items-center gap-1.5 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl p-1.5 shadow-xl">
+                        {/* Second Compact Pill Row: Sound, Music, Map Style, Stations & GPS Controls */}
+                        <div className="pointer-events-auto flex items-center justify-between sm:justify-end gap-1 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl p-1 shadow-xl overflow-x-auto no-scrollbar">
                             <button
                                 onClick={() => {
                                     const nextMuted = !soundMuted;
@@ -2976,43 +3451,65 @@
                                     JetLagAudio.muted = nextMuted;
                                     if (!nextMuted) JetLagAudio.playIntroStinger();
                                 }}
-                                className={`px-2.5 py-1.5 rounded-xl font-display font-bold text-xs uppercase tracking-wider ${
+                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
                                     !soundMuted ? 'bg-jl-green text-white' : 'bg-jl-dark text-jl-cream/50'
                                 }`}
                                 title="Slå Jet Lag lydeffekter til/fra"
                             >
-                                {!soundMuted ? '🔊 Lyd' : '🔇 Lyd'}
+                                {!soundMuted ? '🔊 SFX' : '🔇 SFX'}
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const active = JetLagAudio.toggleBackgroundMusic();
+                                    setMusicPlaying(active);
+                                }}
+                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
+                                    musicPlaying ? 'bg-jl-yellow text-jl-navy animate-pulse' : 'bg-jl-dark text-jl-cream/70'
+                                }`}
+                                title="Spil Jet Lag taktisk baggrundsmusik"
+                            >
+                                {musicPlaying ? '🎵 Musik ON' : '🎵 Musik'}
                             </button>
                             <button
                                 onClick={() => setMapTheme(t => t === 'map-mint' ? 'map-clean' : t === 'map-clean' ? 'map-dark' : 'map-mint')}
-                                className="px-2.5 py-1.5 rounded-xl bg-jl-dark text-jl-cream hover:bg-slate-800 font-display font-bold text-xs uppercase tracking-wider"
-                                title="Skift kort-design"
+                                className="px-2 py-1 rounded-xl bg-jl-dark text-jl-cream font-display font-bold text-[11px] uppercase tracking-wider shrink-0"
                             >
-                                🗺️ {mapTheme === 'map-mint' ? 'Mint' : mapTheme === 'map-clean' ? 'Normal' : 'Nat'}
+                                🗺️ {mapTheme === 'map-mint' ? 'Mint' : mapTheme === 'map-clean' ? 'Kort' : 'Nat'}
                             </button>
                             <button
                                 onClick={() => setShowHubs(!showHubs)}
-                                className={`px-2.5 py-1.5 rounded-xl font-display font-bold text-xs uppercase tracking-wider ${
+                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
                                     showHubs ? 'bg-jl-yellow text-jl-navy' : 'bg-jl-dark text-jl-cream/60'
                                 }`}
-                                title="Vis/Skjul Zone 1-99 Stationer & Lufthavne"
                             >
                                 🚆 St.
                             </button>
                             <button
                                 onClick={() => {
                                     setManualGpsMode(!manualGpsMode);
-                                    notify(!manualGpsMode ? "Test-GPS aktiv: Klik på kortet for at flytte din brik!" : "Live GPS aktiveret.");
+                                    notify(!manualGpsMode ? "Test-GPS: Tryk på kortet for at flytte dig!" : "Telefonens Live GPS er aktiv.");
                                 }}
-                                className={`px-2.5 py-1.5 rounded-xl font-display font-bold text-xs uppercase tracking-wider ${
+                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
                                     manualGpsMode ? 'bg-jl-red text-white animate-pulse' : 'bg-jl-dark text-jl-cream/70'
                                 }`}
-                                title="Flyt din position manuelt ved at klikke på kortet"
                             >
-                                📍 {manualGpsMode ? 'Klik=Flyt' : 'GPS'}
+                                📍 {manualGpsMode ? 'Flyt=Tryk' : 'Live GPS'}
                             </button>
                         </div>
                     </div>
+
+                    {/* Floating Mobile "Center on my GPS" Button */}
+                    <button
+                        onClick={() => {
+                            if (mapInstanceRef.current) {
+                                mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 14, { duration: 0.6 });
+                            }
+                        }}
+                        className="absolute bottom-24 right-3 z-[480] pointer-events-auto w-11 h-11 rounded-2xl bg-jl-navy border-2 border-jl-cream text-jl-yellow shadow-xl flex items-center justify-center active:scale-95"
+                        title="Centrér kortet på min position"
+                    >
+                        🎯
+                    </button>
 
                     {/* 10–15 SEKUNDERS JET LAG TELEMETRI & SPÆNDINGS-OVERLAY */}
                     {pendingTelemetry && (
@@ -3097,8 +3594,8 @@
 
                     {/* HIDER EXCLUSIVE TOP-LEFT LIVE CHASER TRACKER WIDGET */}
                     {myRole === 'hider' && (
-                        <div className="absolute top-20 left-3 z-[480] pointer-events-auto bg-jl-navy/95 border-2 border-jl-green rounded-2xl p-3 shadow-xl max-w-xs text-jl-cream">
-                            <div className="flex items-center justify-between gap-3 mb-1.5">
+                        <div className="absolute top-28 sm:top-20 left-2.5 z-[480] pointer-events-auto bg-jl-navy/95 border-2 border-jl-green rounded-2xl p-2.5 sm:p-3 shadow-xl max-w-[250px] sm:max-w-xs text-jl-cream">
+                            <div className="flex items-center justify-between gap-2 mb-1">
                                 <span className="font-display font-black text-xs uppercase tracking-wider text-jl-green flex items-center gap-1">
                                     📡 LIVE FINDER-AFSTAND
                                 </span>
@@ -3694,12 +4191,12 @@
                             <div className="flex gap-2">
                                 <button
                                     onClick={handleNextRoundSwapTeams}
-                                    className="flex-1 bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-base uppercase py-2.5 rounded-xl shadow"
+                                    className="flex-1 bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-sm sm:text-base uppercase py-2.5 rounded-xl shadow"
                                 >
-                                    🔄 START NY RUNDE & BYT HOLDENES ROLLER
+                                    🔄 NY RUNDE & BYT HOLD
                                 </button>
                                 <button
-                                    onClick={onLeaveRoom}
+                                    onClick={handleLeaveAndCleanupRoom}
                                     className="px-3 bg-jl-red/20 hover:bg-jl-red text-jl-red hover:text-white border border-jl-red/40 font-display font-bold text-xs uppercase rounded-xl"
                                 >
                                     Forlad Rum
@@ -4048,7 +4545,7 @@
                         /* =====================================================================
                            SEEKER (FINDER) INTERFACE DOCK: Question Menu + Map Plotting Tools
                            ===================================================================== */
-                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1.5 sm:gap-3 px-2 pointer-events-auto">
+                        <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1 sm:gap-3 px-1.5 safe-bottom pointer-events-auto max-w-full">
                             {/* 0. Room & Teams Button */}
                             <div className="flex flex-col items-center jl-hex-shadow">
                                 <button
@@ -4181,7 +4678,7 @@
                         /* =====================================================================
                            HIDER (GEMMER) INTERFACE DOCK: Dedicated Runner Surveillance Controls
                            ===================================================================== */
-                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1.5 sm:gap-3 px-2 pointer-events-auto">
+                        <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1.5 sm:gap-3 px-2 safe-bottom pointer-events-auto max-w-full">
                             {/* 0. Room & Teams */}
                             <div className="flex flex-col items-center jl-hex-shadow">
                                 <button
@@ -4297,13 +4794,23 @@
 
         const App = () => {
             const [user, setUser] = useState(null);
-            const [sessionInfo, setSessionInfo] = useState(null); // { playerName, roomCode, initialTeam, teamPreference }
+            const [sessionInfo, setSessionInfo] = useState(() => loadActiveSession()); // Gendanner automatisk aktivt spil ved F5 / opdatering!
             const [isAuthenticating, setIsAuthenticating] = useState(false);
+            const [roomError, setRoomError] = useState(null);
 
             useEffect(() => {
                 if (!isCloudEnabled || !auth) {
-                    // Create a stable session user for local Chrome testing when Firebase isn't configured yet
-                    setUser({ uid: 'local_' + Math.random().toString(36).slice(2, 10), isLocal: true });
+                    let localUid = null;
+                    try {
+                        localUid = sessionStorage.getItem('jl_local_uid');
+                        if (!localUid) {
+                            localUid = 'local_' + Math.random().toString(36).slice(2, 10);
+                            sessionStorage.setItem('jl_local_uid', localUid);
+                        }
+                    } catch (e) {
+                        localUid = 'local_' + Math.random().toString(36).slice(2, 10);
+                    }
+                    setUser({ uid: localUid, isLocal: true });
                     return;
                 }
 
@@ -4326,8 +4833,28 @@
                 return () => unsub();
             }, []);
 
+            // Automatisk baggrunds-oprydning af udløbne rum i Firestore ved opstart
+            useEffect(() => {
+                if (!isCloudEnabled || !db || !user || user.isLocal) return;
+                const roomsCol = collection(db, 'artifacts', appId, 'public', 'data', 'rooms');
+                const unsubCleanup = onSnapshot(roomsCol, (snap) => {
+                    const now = Date.now();
+                    snap.forEach((roomDoc) => {
+                        const data = roomDoc.data();
+                        const lastActive = data.lastActiveMillis || data.createdAtMillis || 0;
+                        if (lastActive > 0 && (now - lastActive) > INACTIVE_ROOM_TIMEOUT_MS) {
+                            deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomDoc.id)).catch(() => {});
+                        }
+                    });
+                }, () => {});
+                return () => unsubCleanup();
+            }, [user]);
+
             const handleJoinRoom = async ({ playerName, roomCode, isCreating, teamPreference }) => {
                 setIsAuthenticating(true);
+                setRoomError(null);
+                JetLagAudio.init();
+
                 try {
                     let currentUser = user;
                     if (isCloudEnabled && auth && !auth.currentUser) {
@@ -4346,44 +4873,89 @@
                     }
 
                     let chosenTeam = teamPreference === 'teamB' ? 'teamB' : 'teamA';
+                    const now = Date.now();
 
                     if (isCloudEnabled && db && currentUser && !currentUser.isLocal) {
                         const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode);
+                        const snap = await getDoc(roomDocRef);
+
                         if (isCreating) {
-                            await setDoc(roomDocRef, {
+                            const newRoomPayload = {
                                 roomCode,
                                 roundNumber: 1,
                                 hidingTeam: 'teamA',
                                 phase: 'hiding',
-                                timerEndMillis: Date.now() + 45 * 60 * 1000,
+                                timerEndMillis: now + 45 * 60 * 1000,
                                 isRunning: true,
-                                createdBy: playerName
-                            });
+                                botHiderStationIdx: Math.floor(Math.random() * BUILTIN_GEO_DATA.station.length),
+                                createdBy: playerName,
+                                createdAtMillis: now,
+                                lastActiveMillis: now
+                            };
+                            await setDoc(roomDocRef, newRoomPayload);
                             if (teamPreference === 'auto') chosenTeam = 'teamA';
                         } else {
-                            const snap = await getDoc(roomDocRef);
+                            // STRENG VALIDERING: Hvis man vælger "Deltag i rum", SKAL rummet eksistere og være aktivt!
                             if (!snap.exists()) {
-                                await setDoc(roomDocRef, {
-                                    roomCode,
-                                    roundNumber: 1,
-                                    hidingTeam: 'teamA',
-                                    phase: 'hiding',
-                                    timerEndMillis: Date.now() + 45 * 60 * 1000,
-                                    isRunning: true,
-                                    createdBy: playerName
-                                });
+                                JetLagAudio.playErrorSound();
+                                setRoomError(`Rummet "${roomCode}" er ikke oprettet endnu! Tjek koden eller tryk "➕ Opret Nyt Rum".`);
+                                setIsAuthenticating(false);
+                                return;
                             }
+                            const roomData = snap.data();
+                            const lastActive = roomData.lastActiveMillis || roomData.createdAtMillis || now;
+                            if ((now - lastActive) > INACTIVE_ROOM_TIMEOUT_MS) {
+                                // Rummet er forældet -> Slet det automatisk og afvis login
+                                await deleteDoc(roomDocRef).catch(() => {});
+                                JetLagAudio.playErrorSound();
+                                setRoomError(`Rummet "${roomCode}" var inaktivt og er blevet lukket automatisk. Opret venligst et nyt rum.`);
+                                setIsAuthenticating(false);
+                                return;
+                            }
+                            // Opdater tidsstempel på det eksisterende rum
+                            await updateDoc(roomDocRef, { lastActiveMillis: now }).catch(() => {});
+                            if (teamPreference === 'auto') chosenTeam = 'teamB';
+                        }
+                    } else {
+                        // Lokal tilstand (uden Firebase): Tjek sessionStorage / lokal hukommelse
+                        const storedLocalRoom = sessionStorage.getItem(`jl_room_${roomCode}`);
+                        const existsLocally = localActiveRoomsRegistry.has(roomCode) || Boolean(storedLocalRoom);
+
+                        if (isCreating) {
+                            const newRoomPayload = {
+                                roomCode,
+                                roundNumber: 1,
+                                hidingTeam: 'teamA',
+                                phase: 'hiding',
+                                timerEndMillis: now + 45 * 60 * 1000,
+                                isRunning: true,
+                                createdBy: playerName,
+                                createdAtMillis: now,
+                                lastActiveMillis: now
+                            };
+                            localActiveRoomsRegistry.set(roomCode, newRoomPayload);
+                            try { sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(newRoomPayload)); } catch (e) {}
+                            if (teamPreference === 'auto') chosenTeam = 'teamA';
+                        } else if (!existsLocally) {
+                            JetLagAudio.playErrorSound();
+                            setRoomError(`Rummet "${roomCode}" findes ikke! Du skal oprette rummet først på "➕ Opret Nyt Rum".`);
+                            setIsAuthenticating(false);
+                            return;
                         }
                     }
 
-                    setSessionInfo({
+                    JetLagAudio.playIntroStinger();
+                    const newSession = {
                         playerName,
                         roomCode,
                         initialTeam: chosenTeam,
                         teamPreference
-                    });
+                    };
+                    saveActiveSession(newSession);
+                    setSessionInfo(newSession);
                 } catch (e) {
                     console.error("Join room error:", e);
+                    setRoomError("Kunne ikke forbinde til rummet. Tjek din internetforbindelse.");
                 } finally {
                     setIsAuthenticating(false);
                 }
@@ -4395,6 +4967,8 @@
                         onJoinRoom={handleJoinRoom}
                         isAuthenticating={isAuthenticating}
                         isCloudActive={isCloudEnabled && !user?.isLocal}
+                        roomError={roomError}
+                        onClearError={() => setRoomError(null)}
                     />
                 );
             }
@@ -4403,7 +4977,13 @@
                 <GameScreen
                     user={user}
                     sessionInfo={sessionInfo}
-                    onLeaveRoom={() => setSessionInfo(null)}
+                    onLeaveRoom={(reasonMsg) => {
+                        clearActiveSession();
+                        setSessionInfo(null);
+                        if (reasonMsg && typeof reasonMsg === 'string') {
+                            setRoomError(reasonMsg);
+                        }
+                    }}
                     isCloudActive={isCloudEnabled && !user?.isLocal}
                 />
             );
