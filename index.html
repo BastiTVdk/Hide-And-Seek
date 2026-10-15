@@ -757,12 +757,36 @@
         };
 
         // ============================================================================
-        // KORT-UDBYDERE UDEN API-KRAV & GEOGRAFISK DATA FOR ZONE 1–99 (KBH & SJÆLLAND)
+        // KORT-UDBYDERE UDEN API-KRAV (ESRI ARCGIS) & GEOGRAFISK DATA FOR ZONE 1–99
         // ============================================================================
+        const TILE_STYLES = {
+            mint: {
+                name: 'Jet Lag Mint',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                filter: 'saturate(1.18) hue-rotate(-10deg) brightness(1.02) contrast(0.96)'
+            },
+            street: {
+                name: 'Gadekort HD',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+                filter: 'none'
+            },
+            light: {
+                name: 'Taktisk Lys',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+                filter: 'saturate(1.1) contrast(1.05)'
+            },
+            sat: {
+                name: 'Satellit',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                filter: 'none'
+            }
+        };
+
         const FREE_TILE_SERVERS = [
-            "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+            TILE_STYLES.mint.url,
+            TILE_STYLES.street.url,
+            TILE_STYLES.light.url,
+            TILE_STYLES.sat.url
         ];
 
         // Hjælpefunktioner til at huske spillerens aktive spil-session ved side-opdatering (F5 / Reload)
@@ -771,13 +795,16 @@
         const saveActiveSession = (sessionData) => {
             if (!sessionData) return;
             const serialized = JSON.stringify(sessionData);
+            try { localStorage.setItem(SESSION_STORAGE_KEY, serialized); } catch (e) {}
             try { sessionStorage.setItem(SESSION_STORAGE_KEY, serialized); } catch (e) {}
             try { window.name = serialized; } catch (e) {}
         };
 
         const loadActiveSession = () => {
             try {
-                const raw = sessionStorage.getItem(SESSION_STORAGE_KEY) || (window.name && window.name.startsWith('{') ? window.name : null);
+                const raw = localStorage.getItem(SESSION_STORAGE_KEY)
+                    || sessionStorage.getItem(SESSION_STORAGE_KEY)
+                    || (window.name && window.name.startsWith('{') ? window.name : null);
                 if (!raw) return null;
                 const parsed = JSON.parse(raw);
                 if (parsed && parsed.playerName && parsed.roomCode) {
@@ -788,6 +815,7 @@
         };
 
         const clearActiveSession = () => {
+            try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) {}
             try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) {}
             try { if (window.name && window.name.startsWith('{')) window.name = ''; } catch (e) {}
         };
@@ -1721,25 +1749,25 @@
             const [players, setPlayers] = useState([]);
             const [mapObjects, setMapObjects] = useState(() => {
                 try {
-                    const cached = sessionStorage.getItem(`jl_objects_${roomCode}`);
+                    const cached = localStorage.getItem(`jl_objects_${roomCode}`) || sessionStorage.getItem(`jl_objects_${roomCode}`);
                     return cached ? JSON.parse(cached) : [];
                 } catch (e) { return []; }
             });
             const [chatMessages, setChatMessages] = useState(() => {
                 try {
-                    const cached = sessionStorage.getItem(`jl_chat_${roomCode}`);
+                    const cached = localStorage.getItem(`jl_chat_${roomCode}`) || sessionStorage.getItem(`jl_chat_${roomCode}`);
                     return cached ? JSON.parse(cached) : [];
                 } catch (e) { return []; }
             });
             const [questionsLog, setQuestionsLog] = useState(() => {
                 try {
-                    const cached = sessionStorage.getItem(`jl_questions_${roomCode}`);
+                    const cached = localStorage.getItem(`jl_questions_${roomCode}`) || sessionStorage.getItem(`jl_questions_${roomCode}`);
                     return cached ? JSON.parse(cached) : [];
                 } catch (e) { return []; }
             });
             const [roomState, setRoomState] = useState(() => {
                 try {
-                    const cached = sessionStorage.getItem(`jl_room_${roomCode}`);
+                    const cached = localStorage.getItem(`jl_room_${roomCode}`) || sessionStorage.getItem(`jl_room_${roomCode}`);
                     if (cached) return JSON.parse(cached);
                 } catch (e) {}
                 return {
@@ -1765,17 +1793,26 @@
                 });
             }, [playerName, roomCode, myTeam]);
 
-            // Gem lokale kopier i sessionStorage så intet går tabt ved F5 / side-opdatering
+            // Gem lokale kopier i både localStorage og sessionStorage så intet går tabt ved F5 / side-opdatering
             useEffect(() => {
-                try { sessionStorage.setItem(`jl_objects_${roomCode}`, JSON.stringify(mapObjects)); } catch (e) {}
+                try {
+                    localStorage.setItem(`jl_objects_${roomCode}`, JSON.stringify(mapObjects));
+                    sessionStorage.setItem(`jl_objects_${roomCode}`, JSON.stringify(mapObjects));
+                } catch (e) {}
             }, [mapObjects, roomCode]);
 
             useEffect(() => {
-                try { sessionStorage.setItem(`jl_questions_${roomCode}`, JSON.stringify(questionsLog)); } catch (e) {}
+                try {
+                    localStorage.setItem(`jl_questions_${roomCode}`, JSON.stringify(questionsLog));
+                    sessionStorage.setItem(`jl_questions_${roomCode}`, JSON.stringify(questionsLog));
+                } catch (e) {}
             }, [questionsLog, roomCode]);
 
             useEffect(() => {
-                try { sessionStorage.setItem(`jl_chat_${roomCode}`, JSON.stringify(chatMessages)); } catch (e) {}
+                try {
+                    localStorage.setItem(`jl_chat_${roomCode}`, JSON.stringify(chatMessages));
+                    sessionStorage.setItem(`jl_chat_${roomCode}`, JSON.stringify(chatMessages));
+                } catch (e) {}
             }, [chatMessages, roomCode]);
 
             // Local UI & Map states
@@ -1799,6 +1836,9 @@
             // 10-15 Sekunders Spændings- & Telemetri-Ventetid + Svar-Reveal Modal
             const [pendingTelemetry, setPendingTelemetry] = useState(null);
             // { category, title, questionText, secondsLeft, totalSeconds, stepText }
+            const [telemetryMinimized, setTelemetryMinimized] = useState(false);
+            const telemetryTimerRef = useRef(null);
+            const telemetryCompleteFnRef = useRef(null);
             const [revealOverlay, setRevealOverlay] = useState(null);
             // { category, headline, subtext, isPositive, cardReward }
 
@@ -1888,6 +1928,7 @@
                     const now = Date.now();
                     localActiveRoomsRegistry.set(roomCode, { ...roomState, lastActiveMillis: now });
                     try {
+                        localStorage.setItem(`jl_room_${roomCode}`, JSON.stringify({ ...roomState, lastActiveMillis: now }));
                         sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify({ ...roomState, lastActiveMillis: now }));
                     } catch (e) {}
 
@@ -1906,6 +1947,10 @@
 
             // Explicit Leave & Auto-Cleanup if Room becomes Empty
             const handleLeaveAndCleanupRoom = async () => {
+                if (telemetryTimerRef.current) {
+                    clearInterval(telemetryTimerRef.current);
+                    telemetryTimerRef.current = null;
+                }
                 JetLagAudio.stopBackgroundMusic();
                 clearActiveSession();
                 const remainingOtherPlayers = players.filter(p => p.uid !== user?.uid && (Date.now() - (p.updatedAtMillis || 0)) < STALE_PLAYER_TIMEOUT_MS);
@@ -1949,10 +1994,8 @@
                     if (tileLayerRef.current) {
                         map.removeLayer(tileLayerRef.current);
                     }
-                    // Bemærk: Ingen crossOrigin-attribut her, da det udløser 403-blokering hos visse kortservere
                     const layer = L.tileLayer(url, {
-                        maxZoom: 19,
-                        subdomains: ['a', 'b', 'c', 'd']
+                        maxZoom: 19
                     });
                     layer.on('tileerror', () => {
                         if (tileProviderIdxRef.current < FREE_TILE_SERVERS.length - 1) {
@@ -2523,24 +2566,49 @@
             };
 
             // ============================================================================
-            // 10–15 SEKUNDERS TELEMETRI-VENTETID & BROADCAST REVEAL MOTOR
+            // 2–5 MINUTTERS TILFÆLDIG TELEMETRI-VENTETID & BROADCAST REVEAL MOTOR
             // ============================================================================
+            const formatDurationMmSs = (totalSecs) => {
+                const m = Math.floor(totalSecs / 60);
+                const s = totalSecs % 60;
+                return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            };
+
+            const skipTelemetryWaitNow = async () => {
+                if (telemetryTimerRef.current) {
+                    clearInterval(telemetryTimerRef.current);
+                    telemetryTimerRef.current = null;
+                }
+                const fn = telemetryCompleteFnRef.current;
+                telemetryCompleteFnRef.current = null;
+                setPendingTelemetry(null);
+                setTelemetryMinimized(false);
+                if (fn) await fn();
+            };
+
             const runWithBroadcastSuspense = ({ category, title, questionText, cardReward, onComplete }) => {
                 setActiveTool(null);
+                setTelemetryMinimized(false);
                 JetLagAudio.playQuestionSent();
 
-                // Send besked i chatten med det samme om at spørgsmålet er stillet og afventer svar
-                sendChatMessage(`📡 [SPØRGSMÅL SENDT — ${category}]: "${questionText}" (Afventer svar om 12 sek... Gemmer trækker: ${cardReward})`);
-
-                const waitSecs = 12; // 12 sekunders spændings-ventetid
+                // Tilfældig svartid mellem 2 minutter (120 sek) og 5 minutter (300 sek)
+                const waitSecs = Math.floor(Math.random() * (300 - 120 + 1)) + 120;
                 let remaining = waitSecs;
+                const minsText = Math.floor(waitSecs / 60);
+                const secsText = waitSecs % 60;
 
-                const getStepText = (secLeft) => {
-                    if (secLeft > 9) return "📡 Sender krypteret spørgsmål til Gemmerne...";
-                    if (secLeft > 5) return "🛰️ Indhenter GPS-telemetri fra Zone 1–99...";
-                    if (secLeft > 2) return "📐 Beregner præcis geografisk skæringslinje...";
+                // Send besked i chatten med det samme om at spørgsmålet er stillet og afventer svar
+                sendChatMessage(`📡 [SPØRGSMÅL SENDT — ${category}]: "${questionText}" (Afventer svar om ${minsText} min og ${secsText} sek... Gemmer trækker: ${cardReward})`);
+
+                const getStepText = (secLeft, total) => {
+                    const pct = (total - secLeft) / total;
+                    if (pct < 0.25) return "📡 Spørgsmål sendt! Gemmerne undersøger området...";
+                    if (pct < 0.60) return "🛰️ Indhenter GPS-telemetri fra Zone 1–99...";
+                    if (pct < 0.88) return "📐 Beregner præcis geografisk skæringslinje...";
                     return "🔐 Låser svar fast og farver kortet...";
                 };
+
+                telemetryCompleteFnRef.current = onComplete;
 
                 setPendingTelemetry({
                     category,
@@ -2549,22 +2617,31 @@
                     cardReward,
                     secondsLeft: remaining,
                     totalSeconds: waitSecs,
-                    stepText: getStepText(remaining)
+                    stepText: getStepText(remaining, waitSecs)
                 });
 
-                const intervalId = setInterval(async () => {
+                if (telemetryTimerRef.current) clearInterval(telemetryTimerRef.current);
+
+                telemetryTimerRef.current = setInterval(async () => {
                     remaining -= 1;
                     if (remaining > 0) {
-                        JetLagAudio.playCountdownTick(remaining);
+                        // Lyd-ping hvert 30. sekund samt de sidste 10 sekunder af nedtællingen
+                        if (remaining <= 10 || remaining % 30 === 0) {
+                            JetLagAudio.playCountdownTick(remaining <= 10 ? remaining : 10);
+                        }
                         setPendingTelemetry(prev => prev ? {
                             ...prev,
                             secondsLeft: remaining,
-                            stepText: getStepText(remaining)
+                            stepText: getStepText(remaining, waitSecs)
                         } : null);
                     } else {
-                        clearInterval(intervalId);
+                        clearInterval(telemetryTimerRef.current);
+                        telemetryTimerRef.current = null;
+                        const fn = telemetryCompleteFnRef.current;
+                        telemetryCompleteFnRef.current = null;
                         setPendingTelemetry(null);
-                        await onComplete();
+                        setTelemetryMinimized(false);
+                        if (fn) await fn();
                     }
                 }, 1000);
             };
@@ -3235,6 +3312,70 @@
                 notify(`🔄 RUNDE ${nextRound}: Holdene har byttet! ${newHiderName} er nu GEMMERE!`);
             };
 
+            // START COMPLETELY NEW GAME: Reset to Round 1, Clear Zones, Questions & Restart 45m Timer
+            const handleStartNewGame = async () => {
+                if (!user) return;
+                if (telemetryTimerRef.current) {
+                    clearInterval(telemetryTimerRef.current);
+                    telemetryTimerRef.current = null;
+                }
+                setPendingTelemetry(null);
+                setRevealOverlay(null);
+                setHiderLockedSpot(null);
+                setActiveTool(null);
+
+                const randomStationIdx = Math.floor(Math.random() * BUILTIN_GEO_DATA.station.length);
+                const freshRoom = {
+                    roomCode,
+                    roundNumber: 1,
+                    hidingTeam: 'teamA',
+                    phase: 'hiding',
+                    timerEndMillis: Date.now() + 45 * 60 * 1000,
+                    isRunning: true,
+                    botHiderStationIdx: randomStationIdx,
+                    updatedBy: playerName,
+                    lastActiveMillis: Date.now()
+                };
+
+                setRoomState(freshRoom);
+                setMapObjects([]);
+                setQuestionsLog([]);
+
+                try {
+                    localStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(freshRoom));
+                    sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(freshRoom));
+                    localStorage.removeItem(`jl_objects_${roomCode}`);
+                    sessionStorage.removeItem(`jl_objects_${roomCode}`);
+                    localStorage.removeItem(`jl_questions_${roomCode}`);
+                    sessionStorage.removeItem(`jl_questions_${roomCode}`);
+                } catch (e) {}
+
+                if (localChannel) {
+                    localChannel.postMessage({ roomCode, kind: 'roomState', payload: freshRoom });
+                    localChannel.postMessage({ roomCode, kind: 'clearObjects' });
+                    localChannel.postMessage({ roomCode, kind: 'clearQuestions' });
+                }
+
+                if (isCloudActive && db) {
+                    try {
+                        const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode);
+                        await setDoc(roomDocRef, freshRoom);
+                        for (const obj of mapObjects) {
+                            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'mapObjects', obj.id));
+                        }
+                        for (const q of questionsLog) {
+                            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'questions', q.id));
+                        }
+                    } catch (e) {
+                        console.error("New game reset error:", e);
+                    }
+                }
+
+                JetLagAudio.playIntroStinger();
+                await sendChatMessage(`🆕 NYT SPIL STARTET AF ${playerName.toUpperCase()}! Runde 1 er begyndt, alle zoner er ryddet, og 45-minutters uret tæller ned!`);
+                notify("🆕 Nyt spil startet! Alt er nulstillet til Runde 1.");
+            };
+
             const handleSaveRadius = async () => {
                 if (!user) return;
                 const km = parseFloat(radiusKm) || 10;
@@ -3435,9 +3576,23 @@
                                 <button
                                     onClick={handleNextRoundSwapTeams}
                                     className="bg-jl-yellow hover:bg-amber-300 text-jl-navy font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
-                                    title="Start ny runde og byt hold"
+                                    title="Start næste runde og byt hold"
                                 >
                                     🔄 Runde
+                                </button>
+                                <button
+                                    onClick={handleStartNewGame}
+                                    className="bg-jl-green hover:bg-emerald-500 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
+                                    title="Start helt nyt spil fra Runde 1"
+                                >
+                                    🆕 Nyt Spil
+                                </button>
+                                <button
+                                    onClick={handleLeaveAndCleanupRoom}
+                                    className="bg-jl-red hover:bg-red-600 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
+                                    title="Forlad spillet og gå til lobbyen"
+                                >
+                                    🚪 Forlad
                                 </button>
                             </div>
                         </div>
@@ -3511,8 +3666,8 @@
                         🎯
                     </button>
 
-                    {/* 10–15 SEKUNDERS JET LAG TELEMETRI & SPÆNDINGS-OVERLAY */}
-                    {pendingTelemetry && (
+                    {/* 2–5 MINUTTERS JET LAG TELEMETRI & SPÆNDINGS-OVERLAY (KAN MINIMERES SÅ KORTET KAN BRUGES) */}
+                    {pendingTelemetry && !telemetryMinimized && (
                         <div className="fixed inset-0 z-[700] bg-jl-dark/80 backdrop-blur-sm flex items-center justify-center p-4">
                             <div className="bg-jl-navy border-4 border-jl-cream rounded-3xl max-w-md w-full p-6 text-center text-jl-cream shadow-2xl relative overflow-hidden">
                                 <div className="inline-block bg-jl-yellow text-jl-navy font-display font-black text-xs uppercase tracking-widest px-3 py-1 rounded jl-slanted-badge mb-3">
@@ -3527,7 +3682,7 @@
                                 </p>
 
                                 {/* Animated Radar Sweep Circle */}
-                                <div className="relative w-32 h-32 mx-auto mb-5 rounded-full border-4 border-jl-yellow/40 bg-jl-dark flex items-center justify-center overflow-hidden shadow-inner">
+                                <div className="relative w-36 h-36 mx-auto mb-5 rounded-full border-4 border-jl-yellow/40 bg-jl-dark flex flex-col items-center justify-center overflow-hidden shadow-inner">
                                     <div className="absolute inset-0 rounded-full border border-jl-yellow/20 scale-75" />
                                     <div className="absolute inset-0 rounded-full border border-jl-yellow/20 scale-50" />
                                     <div
@@ -3536,8 +3691,11 @@
                                             background: 'conic-gradient(from 0deg, transparent 70%, rgba(243, 178, 41, 0.55) 100%)'
                                         }}
                                     />
-                                    <span className="relative z-10 font-display font-black text-4xl text-jl-yellow">
-                                        {pendingTelemetry.secondsLeft}s
+                                    <span className="relative z-10 text-[10px] font-display font-bold uppercase text-jl-cream/70 tracking-widest">
+                                        SVAR OM
+                                    </span>
+                                    <span className="relative z-10 font-display font-black text-4xl text-jl-yellow tracking-wider">
+                                        {formatDurationMmSs(pendingTelemetry.secondsLeft)}
                                     </span>
                                 </div>
 
@@ -3555,8 +3713,64 @@
                                     />
                                 </div>
 
-                                <div className="text-[11px] font-bold text-jl-cream/60 uppercase">
-                                    🃏 Gemmer-belønning: {pendingTelemetry.cardReward}
+                                <div className="text-[11px] font-bold text-jl-cream/60 uppercase mb-4">
+                                    🃏 Gemmer-belønning: {pendingTelemetry.cardReward} • Tilfældig svartid (2–5 min)
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setTelemetryMinimized(true)}
+                                        className="flex-1 bg-jl-dark hover:bg-slate-800 border border-jl-cream/30 text-jl-cream font-display font-bold text-xs uppercase py-2.5 px-3 rounded-xl"
+                                    >
+                                        🗺️ Se Kort Mens Du Venter
+                                    </button>
+                                    <button
+                                        onClick={skipTelemetryWaitNow}
+                                        className="bg-jl-yellow/20 hover:bg-jl-yellow hover:text-jl-navy border border-jl-yellow/50 text-jl-yellow font-display font-bold text-xs uppercase py-2.5 px-3 rounded-xl transition-colors"
+                                        title="Spring ventetiden over (f.eks. ved test)"
+                                    >
+                                        ⏩ Svar Nu
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MINIMERET SVAR-TIMER WIDGET (Når man kigger på kortet under de 2–5 minutters ventetid) */}
+                    {pendingTelemetry && telemetryMinimized && (
+                        <div className="fixed top-28 sm:top-20 right-3 z-[650] pointer-events-auto bg-jl-navy/95 border-2 border-jl-yellow rounded-2xl p-3 shadow-2xl text-jl-cream max-w-xs flex items-center gap-3">
+                            <div
+                                onClick={() => setTelemetryMinimized(false)}
+                                className="w-12 h-12 rounded-full border-2 border-jl-yellow bg-jl-dark flex items-center justify-center relative overflow-hidden cursor-pointer shrink-0"
+                            >
+                                <div
+                                    className="absolute inset-0 jl-radar-sweep"
+                                    style={{ background: 'conic-gradient(from 0deg, transparent 70%, rgba(243, 178, 41, 0.5) 100%)' }}
+                                />
+                                <span className="relative z-10 font-display font-black text-sm text-jl-yellow">
+                                    {formatDurationMmSs(pendingTelemetry.secondsLeft)}
+                                </span>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="font-display font-black text-xs uppercase text-jl-yellow truncate">
+                                    ⏳ {pendingTelemetry.title}
+                                </div>
+                                <div className="text-[10px] text-jl-cream/75 truncate">
+                                    Svar låses op om {formatDurationMmSs(pendingTelemetry.secondsLeft)}
+                                </div>
+                                <div className="flex gap-1.5 mt-1">
+                                    <button
+                                        onClick={() => setTelemetryMinimized(false)}
+                                        className="bg-jl-dark border border-jl-cream/30 text-[10px] font-display font-bold uppercase px-2 py-0.5 rounded"
+                                    >
+                                        Åbn
+                                    </button>
+                                    <button
+                                        onClick={skipTelemetryWaitNow}
+                                        className="bg-jl-yellow text-jl-navy text-[10px] font-display font-black uppercase px-2 py-0.5 rounded"
+                                    >
+                                        ⏩ Svar Nu
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -4188,18 +4402,26 @@
                                 </div>
                             </div>
 
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={handleNextRoundSwapTeams}
-                                    className="flex-1 bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-sm sm:text-base uppercase py-2.5 rounded-xl shadow"
-                                >
-                                    🔄 NY RUNDE & BYT HOLD
-                                </button>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={handleNextRoundSwapTeams}
+                                        className="flex-1 bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-sm sm:text-base uppercase py-2.5 rounded-xl shadow"
+                                    >
+                                        🔄 NÆSTE RUNDE (BYT HOLD)
+                                    </button>
+                                    <button
+                                        onClick={handleStartNewGame}
+                                        className="flex-1 bg-jl-green hover:bg-emerald-500 text-white font-display font-black text-sm sm:text-base uppercase py-2.5 rounded-xl shadow"
+                                    >
+                                        🆕 START NYT SPIL
+                                    </button>
+                                </div>
                                 <button
                                     onClick={handleLeaveAndCleanupRoom}
-                                    className="px-3 bg-jl-red/20 hover:bg-jl-red text-jl-red hover:text-white border border-jl-red/40 font-display font-bold text-xs uppercase rounded-xl"
+                                    className="w-full py-2.5 bg-jl-red/20 hover:bg-jl-red text-jl-red hover:text-white border border-jl-red/50 font-display font-black text-sm uppercase rounded-xl transition-colors"
                                 >
-                                    Forlad Rum
+                                    🚪 FORLAD SPILLET (TILBAGE TIL LOBBY)
                                 </button>
                             </div>
                         </div>
@@ -4917,8 +5139,8 @@
                             if (teamPreference === 'auto') chosenTeam = 'teamB';
                         }
                     } else {
-                        // Lokal tilstand (uden Firebase): Tjek sessionStorage / lokal hukommelse
-                        const storedLocalRoom = sessionStorage.getItem(`jl_room_${roomCode}`);
+                        // Lokal tilstand (uden Firebase): Tjek localStorage / sessionStorage / lokal hukommelse
+                        const storedLocalRoom = localStorage.getItem(`jl_room_${roomCode}`) || sessionStorage.getItem(`jl_room_${roomCode}`);
                         const existsLocally = localActiveRoomsRegistry.has(roomCode) || Boolean(storedLocalRoom);
 
                         if (isCreating) {
@@ -4934,7 +5156,10 @@
                                 lastActiveMillis: now
                             };
                             localActiveRoomsRegistry.set(roomCode, newRoomPayload);
-                            try { sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(newRoomPayload)); } catch (e) {}
+                            try {
+                                localStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(newRoomPayload));
+                                sessionStorage.setItem(`jl_room_${roomCode}`, JSON.stringify(newRoomPayload));
+                            } catch (e) {}
                             if (teamPreference === 'auto') chosenTeam = 'teamA';
                         } else if (!existsLocally) {
                             JetLagAudio.playErrorSound();
