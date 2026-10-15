@@ -101,44 +101,75 @@
             box-shadow: 0 4px 0 rgba(18, 26, 36, 0.45);
         }
         
-        /* Jet Lag Hexagon Button (Responsive for Mobile & Desktop) */
-        .jl-hex-outer {
-            width: 52px;
-            height: 58px;
-            clip-path: polygon(50% 0%, 96% 25%, 96% 75%, 50% 100%, 4% 75%, 4% 25%);
-            background-color: #ECECE4;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 3.5px;
-            transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
-            cursor: pointer;
-            touch-action: manipulation;
+        /* Modernized Jet Lag Bottom Navigation Dock */
+        .jl-dock-bar {
+            background: rgba(18, 26, 36, 0.96);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 2.5px solid #ECECE4;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55), 0 4px 0 rgba(18, 26, 36, 0.8);
         }
-        @media (min-width: 640px) {
-            .jl-hex-outer {
-                width: 62px;
-                height: 68px;
-                padding: 4px;
-            }
-        }
-        .jl-hex-outer:hover { transform: translateY(-4px) scale(1.05); }
-        .jl-hex-outer:active { transform: translateY(1px) scale(0.95); }
-        .jl-hex-outer.active-hex {
-            background-color: #F3B229;
-            transform: translateY(-6px) scale(1.08);
-        }
-        .jl-hex-inner {
-            width: 100%;
-            height: 100%;
-            clip-path: polygon(50% 0%, 96% 25%, 96% 75%, 50% 100%, 4% 75%, 4% 25%);
+        .jl-dock-item {
+            position: relative;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            padding: 6px 8px;
+            border-radius: 16px;
+            transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+            cursor: pointer;
+            touch-action: manipulation;
+            min-width: 68px;
         }
-        .jl-hex-shadow {
-            filter: drop-shadow(0 6px 10px rgba(18, 26, 36, 0.45));
+        @media (min-width: 640px) {
+            .jl-dock-item {
+                min-width: 88px;
+                padding: 8px 14px;
+            }
+        }
+        .jl-dock-item:active {
+            transform: scale(0.93);
+        }
+        .jl-dock-item.active-tab {
+            background: #F3B229;
+            color: #1B2634;
+            transform: translateY(-5px);
+            box-shadow: 0 6px 14px rgba(243, 178, 41, 0.4);
+        }
+        .jl-dock-item.active-tab-green {
+            background: #2EB85C;
+            color: #FFFFFF;
+            transform: translateY(-5px);
+            box-shadow: 0 6px 14px rgba(46, 184, 92, 0.45);
+        }
+
+        /* Dynamic Atlas Marker on Map */
+        .jl-atlas-pin {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #1B2634;
+            color: #ECECE4;
+            border: 2px solid #F3B229;
+            border-radius: 9999px;
+            padding: 2px 8px;
+            font-family: 'Barlow Condensed', sans-serif;
+            font-weight: 800;
+            font-size: 12px;
+            letter-spacing: 0.4px;
+            white-space: nowrap;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.45);
+            transform: translate(-50%, -50%);
+        }
+        .jl-atlas-pin.nearest-highlight {
+            background: #F3B229;
+            color: #1B2634;
+            border: 2.5px solid #FFFFFF;
+            font-weight: 900;
+            font-size: 13px;
+            z-index: 900 !important;
+            box-shadow: 0 0 0 5px rgba(243, 178, 41, 0.35), 0 6px 14px rgba(0,0,0,0.5);
         }
 
         /* Player Broadcast Pin (Matches Image 2 RUNNER & CHASERS Pins) */
@@ -324,7 +355,7 @@
         // INDSÆT DIN EGEN FIREBASE CONFIG HER HVIS DU ÅBNER FILEN DIREKTE I CHROME:
         // (Se guiden i chatten eller tryk på "⚙️ Chrome / Firebase Guide" inde i appen)
         // ============================================================================
-     const EGEN_FIREBASE_CONFIG = {
+        const EGEN_FIREBASE_CONFIG = {
             apiKey: "AIzaSyBnEPLeHJ6rgEnJZLHqre6ub7YDZw-m5ds",
             authDomain: "jetlag-v2.firebaseapp.com",
             projectId: "jetlag-v2",
@@ -344,9 +375,10 @@
             console.warn("Kunne ikke læse miljø-config:", e);
         }
 
-        const activeFirebaseConfig = (parsedEnvConfig && parsedEnvConfig.apiKey)
-            ? parsedEnvConfig
-            : (EGEN_FIREBASE_CONFIG.apiKey ? EGEN_FIREBASE_CONFIG : null);
+        // Prioritér altid EGEN_FIREBASE_CONFIG først, så jeres egen jetlag-v2 server bruges!
+        const activeFirebaseConfig = EGEN_FIREBASE_CONFIG.apiKey
+            ? EGEN_FIREBASE_CONFIG
+            : ((parsedEnvConfig && parsedEnvConfig.apiKey) ? parsedEnvConfig : null);
 
         let app = null;
         let auth = null;
@@ -671,6 +703,27 @@
             playErrorSound() {
                 this.playSynthVoice(220, { type: 'sawtooth', duration: 0.18, delay: 0, vol: 0.14, filterPeak: 1400, sendEcho: false });
                 this.playSynthVoice(164.81, { type: 'sawtooth', duration: 0.30, delay: 0.14, vol: 0.16, filterPeak: 1100, sendEcho: false });
+            },
+
+            // Crisp Tactile UI Button Click Sound
+            playUiClick(pitch = 680) {
+                this.playSynthVoice(pitch, {
+                    type: 'triangle',
+                    detuneCents: 2,
+                    duration: 0.055,
+                    delay: 0,
+                    vol: 0.08,
+                    attack: 0.003,
+                    filterStart: 1200,
+                    filterPeak: 2800,
+                    sendEcho: false
+                });
+            },
+
+            // Proximity Radar Warning Sound when Chasers get close to Hider
+            playProximityPing() {
+                this.playSynthVoice(1046.5, { type: 'sine', duration: 0.16, delay: 0, vol: 0.12, filterPeak: 3500, sendEcho: true });
+                this.playSynthVoice(1318.5, { type: 'sine', duration: 0.22, delay: 0.14, vol: 0.12, filterPeak: 4000, sendEcho: true });
             },
 
             // Urgent Alert for Hiders when Seekers ask a question
@@ -1068,6 +1121,89 @@
             ]
         };
 
+        // Jernbane- og Metronetværk til visuel visning på kortet
+        const TRANSIT_NETWORK_LINES = [
+            {
+                name: "S-tog Linje A (Køge – KBH H – Hillerød)",
+                color: "#38bdf8",
+                coords: [
+                    [55.4583, 12.1869], [55.4978, 12.1778], [55.5333, 12.2194], [55.5989, 12.3333],
+                    [55.6522, 12.5161], [55.6653, 12.5594], [55.6726, 12.5649], [55.6831, 12.5716],
+                    [55.6928, 12.5871], [55.7308, 12.5675], [55.7681, 12.5033], [55.8167, 12.4689],
+                    [55.8406, 12.4239], [55.9272, 12.3106]
+                ]
+            },
+            {
+                name: "S-tog Linje B (Høje Taastrup – KBH H – Farum)",
+                color: "#2EB85C",
+                coords: [
+                    [55.6486, 12.2694], [55.6581, 12.3536], [55.6633, 12.3986], [55.6639, 12.5136],
+                    [55.6726, 12.5649], [55.6831, 12.5716], [55.6928, 12.5871], [55.8117, 12.3758]
+                ]
+            },
+            {
+                name: "S-tog Linje C (Frederikssund – KBH H – Klampenborg)",
+                color: "#F3B229",
+                coords: [
+                    [55.8358, 12.0644], [55.7303, 12.3586], [55.6858, 12.4994], [55.6639, 12.5136],
+                    [55.6726, 12.5649], [55.6831, 12.5716], [55.6928, 12.5871], [55.7308, 12.5675],
+                    [55.7769, 12.5878]
+                ]
+            },
+            {
+                name: "Kystbanen & Regional (Roskilde – KBH H – Helsingør)",
+                color: "#E5762B",
+                coords: [
+                    [55.6392, 12.0894], [55.6486, 12.2694], [55.6639, 12.5136], [55.6726, 12.5649],
+                    [55.6831, 12.5716], [55.6928, 12.5871], [55.7308, 12.5675], [55.7769, 12.5878],
+                    [55.8842, 12.5283], [55.9636, 12.5336], [56.0339, 12.6139]
+                ]
+            },
+            {
+                name: "Øresundsbanen & Højhastighedsbane (Køge Nord – KBH H – CPH Lufthavn)",
+                color: "#a855f7",
+                coords: [
+                    [55.4978, 12.1778], [55.6522, 12.5161], [55.6726, 12.5649],
+                    [55.6292, 12.5786], [55.6297, 12.6014], [55.6180, 12.6508]
+                ]
+            },
+            {
+                name: "Metro M1/M2 (Vanløse – Indre By – Vestamager / Lufthavnen)",
+                color: "#facc15",
+                coords: [
+                    [55.6878, 12.4908], [55.6858, 12.4994], [55.6811, 12.5342], [55.6831, 12.5716],
+                    [55.6794, 12.5858], [55.6722, 12.5914], [55.6633, 12.6033], [55.6453, 12.6383],
+                    [55.6297, 12.6492]
+                ]
+            }
+        ];
+
+        // Kategorier i det interaktive Kort-Atlas (for både Gemmere og Findere)
+        const ATLAS_CATEGORIES = [
+            { id: "lufthavn", icon: "✈️", label: "Lufthavne", desc: "Commercielle lufthavne (CPH & RKE)" },
+            { id: "station", icon: "🚆", label: "Jernbaner & Togstationer", desc: "S-tog, Regionaltog & Kystbanen", showRail: true },
+            { id: "highspeed_rail", icon: "🚄", label: "Højhastighedstog", desc: "KBH–Ringsted & Øresundsbanen", showRail: true },
+            { id: "metro", icon: "🚇", label: "Metrostationer (M1–M4)", desc: "Københavns Metronetværk", showRail: true },
+            { id: "kommune", icon: "🏛️", label: "Kommuner (3rd Admin)", desc: "20 kommuner i Hovedstadsområdet" },
+            { id: "bydel", icon: "🏘️", label: "Bydele (4th Admin)", desc: "Københavns & Frederiksbergs bydele" },
+            { id: "landsdel", icon: "🗺️", label: "Landsdele (2nd Admin)", desc: "Byen KBH, Omegn, Nordsjælland, Østsjælland" },
+            { id: "region", icon: "🛡️", label: "Regioner (1st Admin)", desc: "Region Hovedstaden & Region Sjælland" },
+            { id: "coastline", icon: "🌊", label: "Kystlinje & Hav", desc: "Øresund, Køge Bugt & Roskilde Fjord" },
+            { id: "water", icon: "💧", label: "Søer & Vandløb", desc: "Søerne, Furesø, Esrum Sø, Arresø m.fl." },
+            { id: "mountain", icon: "⛰️", label: "Bakker & Højdepunkter", desc: "Herstedhøje, CopenHill, Valby Bakke m.fl." },
+            { id: "park", icon: "🌳", label: "Parker & Natur", desc: "Fælledparken, Dyrehaven, Kongens Have m.fl." },
+            { id: "museum", icon: "🖼️", label: "Museer", desc: "Nationalmuseet, SMK, Louisiana, Arken m.fl." },
+            { id: "hospital", icon: "🏥", label: "Hospitaler", desc: "Rigshospitalet, Herlev, Hvidovre, Bispebjerg m.fl." },
+            { id: "library", icon: "📚", label: "Biblioteker", desc: "Den Sorte Diamant, Hovedbiblioteket m.fl." },
+            { id: "cinema", icon: "🎬", label: "Biografer", desc: "Imperial, Palads, Dagmar, Empire Bio m.fl." },
+            { id: "amusement", icon: "🎡", label: "Forlystelsesparker", desc: "Tivoli & Dyrehavsbakken" },
+            { id: "zoo", icon: "🦁", label: "Zoo", desc: "København Zoo" },
+            { id: "aquarium", icon: "🐠", label: "Akvarium", desc: "Den Blå Planet" },
+            { id: "golf", icon: "⛳", label: "Golfbaner", desc: "Royal Golf, KBH Golf Klub, Smørum m.fl." },
+            { id: "consulate", icon: "🏳️", label: "Ambassader", desc: "Udenlandske ambassader og konsulater" },
+            { id: "int_border", icon: "🛃", label: "Landegrænse (DK/SE)", desc: "Øresundsgrænsen mod Sverige" }
+        ];
+
         // ============================================================================
         // DE 80 OFFICIELLE SPØRGSMÅL FRA JET LAG: HIDE + SEEK REGELBOGEN
         // ============================================================================
@@ -1189,6 +1325,18 @@
             });
 
             return best ? { ...best, distanceKm: bestDist, index: bestIdx } : null;
+        };
+
+        // Udregner kompasretning (N, NØ, Ø, SØ, S, SV, V, NV) fra Gemmer til Finder
+        const getCompassDirection = (fromLat, fromLng, toLat, toLng) => {
+            try {
+                const bearing = turf.bearing(turf.point([fromLng, fromLat]), turf.point([toLng, toLat]));
+                const normalized = (bearing + 360) % 360;
+                const dirs = ['N', 'NØ', 'Ø', 'SØ', 'S', 'SV', 'V', 'NV'];
+                return dirs[Math.round(normalized / 45) % 8];
+            } catch (e) {
+                return 'N';
+            }
         };
 
         // Konverterer lat/lng til lokale kilometer-koordinater omkring København (55.676° N)
@@ -1740,6 +1888,7 @@
                 exclusions: L.layerGroup(),
                 preview: L.layerGroup(),
                 hubs: L.layerGroup(),
+                atlas: L.layerGroup(),
                 hiderZone: L.layerGroup(),
                 players: L.layerGroup()
             });
@@ -1821,21 +1970,27 @@
             const [soundMuted, setSoundMuted] = useState(false);
             const [musicPlaying, setMusicPlaying] = useState(false);
             const [wakeLockActive, setWakeLockActive] = useState(false);
+            const [burgerMenuOpen, setBurgerMenuOpen] = useState(false);
+            const [trackerCollapsed, setTrackerCollapsed] = useState(false);
+            const [simulateBotChasers, setSimulateBotChasers] = useState(false);
+            const [botChaserTick, setBotChaserTick] = useState(0);
             const [hiderShowSeekerZones, setHiderShowSeekerZones] = useState(false); // Hiders get a clean map by default!
             const [hiderLockedSpot, setHiderLockedSpot] = useState(null);
             const [activeTool, setActiveTool] = useState(null);
-            // Seeker tools: 'questions', 'radius', 'polygon', 'thermometer', 'layers', 'chat', 'room'
-            // Hider tools: 'chaser_radar', 'hider_inbox', 'hider_zone', 'chat', 'room'
+            // Tools: 'questions', 'atlas', 'seeker_tools', 'hider_tactics', 'hider_inbox', 'radius', 'polygon', 'thermometer', 'layers', 'chat', 'room'
             const [questionTab, setQuestionTab] = useState('radar'); // 'radar', 'thermometer', 'measuring', 'matching', 'tentacles', 'photos'
+
+            // Dynamic Map Atlas & Live Category Inspector States (Available to BOTH Hiders and Seekers!)
+            const [activeAtlasCategory, setActiveAtlasCategory] = useState(null);
+            const [showAtlasVoronoi, setShowAtlasVoronoi] = useState(true);
+            const [atlasModalTab, setAtlasModalTab] = useState('map_layers'); // 'map_layers' | 'all_questions'
 
             const [statusBanner, setStatusBanner] = useState(null);
             const [manualGpsMode, setManualGpsMode] = useState(false);
             const [myCoords, setMyCoords] = useState({ lat: 55.6761, lng: 12.5683 });
             const [unreadCount, setUnreadCount] = useState(0);
-
-            // 10-15 Sekunders Spændings- & Telemetri-Ventetid + Svar-Reveal Modal
+            const prevQuestionsCountRef = useRef(questionsLog.length);
             const [pendingTelemetry, setPendingTelemetry] = useState(null);
-            // { category, title, questionText, secondsLeft, totalSeconds, stepText }
             const [telemetryMinimized, setTelemetryMinimized] = useState(false);
             const telemetryTimerRef = useRef(null);
             const telemetryCompleteFnRef = useRef(null);
@@ -2014,6 +2169,7 @@
                 layersRef.current.exclusions.addTo(map);
                 layersRef.current.preview.addTo(map);
                 layersRef.current.hubs.addTo(map);
+                layersRef.current.atlas.addTo(map);
                 layersRef.current.hiderZone.addTo(map);
                 layersRef.current.players.addTo(map);
 
@@ -2234,15 +2390,84 @@
                 };
             }, [players, roomState.hidingTeam, roomState.botHiderStationIdx]);
 
-            // List of Seekers (Chasers) with live distance to the Hider (used in the Hider's Chaser Radar!)
+            // Simulerede Bot-Findere hvis man tester alene som Gemmer og slår dem til
+            useEffect(() => {
+                if (!simulateBotChasers) return;
+                const iv = setInterval(() => {
+                    setBotChaserTick(t => t + 1);
+                }, 4000);
+                return () => clearInterval(iv);
+            }, [simulateBotChasers]);
+
+            // List of Seekers (Chasers) with live distance & compass direction to the Hider (ALWAYS visible to Hiders!)
             const chasersWithDistance = useMemo(() => {
-                const seekerList = players.filter(p => p.team !== roomState.hidingTeam && typeof p.lat === 'number');
+                const seekerTeam = roomState.hidingTeam === 'teamA' ? 'teamB' : 'teamA';
+                let seekerList = players.filter(p => (p.team !== roomState.hidingTeam || p.role === 'seeker') && p.uid !== user?.uid && typeof p.lat === 'number');
+
+                if (seekerList.length === 0 && simulateBotChasers) {
+                    const angle = (botChaserTick * 18 * Math.PI) / 180;
+                    seekerList = [
+                        {
+                            uid: 'bot_chaser_1',
+                            name: 'Bot-Finder (Sam & Adam)',
+                            team: seekerTeam,
+                            role: 'seeker',
+                            isBot: true,
+                            lat: 55.6761 + Math.sin(angle) * 0.022,
+                            lng: 12.5683 + Math.cos(angle) * 0.035,
+                            updatedAtMillis: Date.now()
+                        }
+                    ];
+                }
+
                 const hiderPt = turf.point([myCoords.lng, myCoords.lat]);
                 return seekerList.map(s => {
                     const d = turf.distance(hiderPt, turf.point([s.lng, s.lat]), { units: 'kilometers' });
-                    return { ...s, distanceKm: d };
+                    const compass = getCompassDirection(myCoords.lat, myCoords.lng, s.lat, s.lng);
+                    const secsAgo = Math.max(0, Math.round((Date.now() - (s.updatedAtMillis || Date.now())) / 1000));
+                    return { ...s, distanceKm: d, compass, secsAgo };
                 }).sort((a, b) => a.distanceKm - b.distanceKm);
-            }, [players, roomState.hidingTeam, myCoords]);
+            }, [players, roomState.hidingTeam, myCoords, user, simulateBotChasers, botChaserTick]);
+
+            // Afspil advarselslyd for Gemmeren når Finderne sender et nyt spørgsmål
+            useEffect(() => {
+                if (questionsLog.length > prevQuestionsCountRef.current) {
+                    if (myRole === 'hider') {
+                        JetLagAudio.playHiderAlert();
+                        notify("🚨 NYT SPØRGSMÅL MODTAGET FRA FINDERNE!");
+                    }
+                }
+                prevQuestionsCountRef.current = questionsLog.length;
+            }, [questionsLog.length, myRole]);
+
+            // Funktion til Gemmere: Zoom kortet så både Gemmer og ALLE Findere kan ses samtidigt
+            const fitMapToChasers = () => {
+                if (!mapInstanceRef.current) return;
+                JetLagAudio.playUiClick(820);
+                if (chasersWithDistance.length === 0) {
+                    mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 13, { duration: 0.6 });
+                    return;
+                }
+                const pts = [[myCoords.lat, myCoords.lng], ...chasersWithDistance.map(c => [c.lat, c.lng])];
+                const bounds = L.latLngBounds(pts);
+                mapInstanceRef.current.fitBounds(bounds, { padding: [70, 70], maxZoom: 15 });
+            };
+
+            // Kopiér Rum-Kode til udklipsholder
+            const copyRoomCodeToClipboard = () => {
+                JetLagAudio.playUiClick(880);
+                try {
+                    const temp = document.createElement('textarea');
+                    temp.value = roomCode;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                    notify(`📋 Rum-kode "${roomCode}" kopieret!`);
+                } catch (e) {
+                    notify(`Rum-kode: ${roomCode}`);
+                }
+            };
 
             // Pending manual/photo questions waiting for the Hider to answer
             const pendingManualQuestions = useMemo(() => {
@@ -2312,12 +2537,23 @@
                     }
                 }).addTo(layersRef.current.hiderZone);
 
-                // Draw tactical tracking lines from Hider to every Chaser on the map!
+                // Draw tactical tracking lines & distance badges from Hider to every Chaser on the map!
                 chasersWithDistance.forEach(chaser => {
+                    const isDanger = chaser.distanceKm < 2;
                     L.polyline([[myCoords.lat, myCoords.lng], [chaser.lat, chaser.lng]], {
-                        color: chaser.distanceKm < 2 ? '#DB3832' : '#F3B229',
-                        weight: 3,
+                        color: isDanger ? '#DB3832' : '#F3B229',
+                        weight: isDanger ? 4 : 3,
                         dashArray: '6, 8',
+                        interactive: false
+                    }).addTo(layersRef.current.hiderZone);
+
+                    // Tegn også en synlig radar-halo rundt om hver Finder, så Gemmeren altid kan spotte dem ved lavt zoom
+                    L.circleMarker([chaser.lat, chaser.lng], {
+                        radius: 26,
+                        color: isDanger ? '#DB3832' : '#F3B229',
+                        weight: 2,
+                        fillColor: isDanger ? '#DB3832' : '#F3B229',
+                        fillOpacity: 0.18,
                         interactive: false
                     }).addTo(layersRef.current.hiderZone);
                 });
@@ -2491,11 +2727,21 @@
                 if (!mapInstanceRef.current || !user) return;
                 layersRef.current.players.clearLayers();
 
-                players.forEach(p => {
+                // Kombinér rigtige spillere + eventuelle simulerede Bot-Findere (kun synlige for Gemmer)
+                const combinedList = [...players];
+                if (myRole === 'hider' && simulateBotChasers) {
+                    chasersWithDistance.forEach(ch => {
+                        if (ch.isBot && !combinedList.some(p => p.uid === ch.uid)) {
+                            combinedList.push(ch);
+                        }
+                    });
+                }
+
+                combinedList.forEach(p => {
                     const isMe = p.uid === user.uid;
                     const playerEffectiveRole = p.team === roomState.hidingTeam ? 'hider' : 'seeker';
 
-                    // Rule: Hiders (Hold Gemmer) see EVERYONE. Seekers (Hold Finder) ONLY see Seekers!
+                    // Rule: Hiders (Hold Gemmer) see EVERYONE (especially all Seekers!). Seekers (Hold Finder) ONLY see Seekers!
                     const isVisible = isMe || myRole === 'hider' || playerEffectiveRole === 'seeker';
 
                     if (!isVisible || typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
@@ -2505,6 +2751,14 @@
                     const roleText = isRunner ? 'RUNNER' : 'CHASERS';
                     const pinClass = isRunner ? 'runner' : 'chaser';
                     const teamLabel = p.team === 'teamA' ? 'H1' : 'H2';
+
+                    // Hvis jeg er Gemmer og kigger på en Finder, viser vi også den direkte afstand lige på Finderens kort-pin!
+                    let distBadgeHtml = '';
+                    if (myRole === 'hider' && !isRunner && !isMe) {
+                        const dKm = turf.distance(turf.point([myCoords.lng, myCoords.lat]), turf.point([p.lng, p.lat]), { units: 'kilometers' });
+                        const dText = dKm < 1 ? `${Math.round(dKm * 1000)}m` : `${dKm.toFixed(1)}km`;
+                        distBadgeHtml = `<div style="background:#DB3832;color:#fff;font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:11px;padding:0 6px;border-radius:999px;border:1.5px solid #fff;margin-top:1px;">🎯 ${dText}</div>`;
+                    }
 
                     const icon = L.divIcon({
                         className: '',
@@ -2516,15 +2770,19 @@
                                 <div class="jl-pin-banner ${pinClass}">${roleText}</div>
                                 <div class="jl-pin-pointer ${pinClass}"></div>
                                 <div class="jl-pin-name-tag">[${teamLabel}] ${p.name}${isMe ? ' (DIG)' : ''}</div>
+                                ${distBadgeHtml}
                             </div>
                         `,
-                        iconSize: [68, 86],
+                        iconSize: [68, 96],
                         iconAnchor: [34, 72]
                     });
 
-                    L.marker([p.lat, p.lng], { icon }).addTo(layersRef.current.players);
+                    L.marker([p.lat, p.lng], {
+                        icon,
+                        zIndexOffset: !isRunner ? 1000 : 500
+                    }).addTo(layersRef.current.players);
                 });
-            }, [players, myRole, roomState.hidingTeam, user]);
+            }, [players, myRole, roomState.hidingTeam, user, myCoords, simulateBotChasers, chasersWithDistance]);
 
             const saveMapObject = async (newObj) => {
                 const fullObj = {
@@ -3502,6 +3760,152 @@
                 return nearest ? `${nearest.name} (${nearest.distanceKm.toFixed(2)} km)` : '0 km';
             }, [myCoords, qMeasureTarget]);
 
+            // Hvilken kategori skal vises dynamisk på kortet lige nu?
+            // Enten den kategori spilleren har valgt i Kort-Atlasset, ELLER den kategori Finderen kigger på i Spørgsmåls-menuen!
+            const effectiveDynamicCategory = useMemo(() => {
+                if (activeAtlasCategory) return activeAtlasCategory;
+                if (activeTool === 'questions') {
+                    if (questionTab === 'matching') {
+                        const m = OFFICIAL_MATCHING_QUESTIONS.find(q => q.id === qMatchCategory);
+                        if (m && BUILTIN_GEO_DATA[m.id]) return m.id;
+                        if (m && m.mode === 'station_length') return 'station';
+                    }
+                    if (questionTab === 'measuring') {
+                        if (BUILTIN_GEO_DATA[qMeasureTarget]) return qMeasureTarget;
+                    }
+                    if (questionTab === 'tentacles') {
+                        const t = OFFICIAL_TENTACLE_QUESTIONS.find(x => x.id === qTentacleId);
+                        if (t && BUILTIN_GEO_DATA[t.cat]) return t.cat;
+                    }
+                }
+                return null;
+            }, [activeAtlasCategory, activeTool, questionTab, qMatchCategory, qMeasureTarget, qTentacleId]);
+
+            const dynamicCategoryMeta = useMemo(() => {
+                if (!effectiveDynamicCategory) return null;
+                return ATLAS_CATEGORIES.find(c => c.id === effectiveDynamicCategory) || {
+                    id: effectiveDynamicCategory,
+                    icon: '📍',
+                    label: effectiveDynamicCategory.toUpperCase()
+                };
+            }, [effectiveDynamicCategory]);
+
+            const nearestDynamicPOI = useMemo(() => {
+                if (!effectiveDynamicCategory || !BUILTIN_GEO_DATA[effectiveDynamicCategory]) return null;
+                return getNearestPOI(myCoords.lat, myCoords.lng, BUILTIN_GEO_DATA[effectiveDynamicCategory]);
+            }, [effectiveDynamicCategory, myCoords]);
+
+            // Nærmeste station til Gemmeren (bruges til dynamisk 500m stations-status for Gemmere)
+            const hiderNearestStation = useMemo(() => {
+                const spot = hiderLockedSpot || myCoords;
+                return getNearestPOI(spot.lat, spot.lng, BUILTIN_GEO_DATA.station);
+            }, [myCoords, hiderLockedSpot]);
+
+            // Dynamisk optegning af valgt kort-kategori (Lufthavne, Jernbaner, Voronoi-zoner, Nærmeste punkt m.m.)
+            useEffect(() => {
+                if (!mapInstanceRef.current || !layersRef.current.atlas) return;
+                layersRef.current.atlas.clearLayers();
+
+                if (!effectiveDynamicCategory) return;
+                const list = BUILTIN_GEO_DATA[effectiveDynamicCategory];
+                if (!list || list.length === 0) return;
+
+                const catMeta = dynamicCategoryMeta || { icon: '📍', label: effectiveDynamicCategory };
+                const nearest = getNearestPOI(myCoords.lat, myCoords.lng, list);
+
+                // 1. Hvis kategorien er Jernbaner/Stationer, Højhastighedsbane eller Metro -> Tegn hele linjenetværket!
+                if (catMeta.showRail) {
+                    TRANSIT_NETWORK_LINES.forEach(line => {
+                        L.polyline(line.coords, {
+                            color: line.color,
+                            weight: 4,
+                            opacity: 0.85,
+                            dashArray: line.name.includes('Metro') ? '4, 6' : null,
+                            interactive: false
+                        }).addTo(layersRef.current.atlas);
+                    });
+                }
+
+                // 2. Hvis Voronoi-skæringslinjer er slået til -> Tegn den aktive Voronoi-celle omkring spillerens nærmeste punkt
+                // samt skæringslinjerne mellem alle punkterne i kategorien!
+                if (showAtlasVoronoi && list.length >= 2 && list.length <= 25) {
+                    list.forEach((pt, idx) => {
+                        const isMyCell = nearest && nearest.index === idx;
+                        const cellGeo = buildExclusionGeoJSON({
+                            type: 'voronoi_cell',
+                            points: list,
+                            targetIdx: idx,
+                            invert: false
+                        });
+                        if (cellGeo) {
+                            L.geoJSON(cellGeo, {
+                                interactive: false,
+                                style: {
+                                    color: isMyCell ? '#2EB85C' : '#F3B229',
+                                    weight: isMyCell ? 3 : 1.5,
+                                    dashArray: isMyCell ? null : '5, 5',
+                                    fillColor: isMyCell ? '#2EB85C' : '#F3B229',
+                                    fillOpacity: isMyCell ? 0.14 : 0.03
+                                }
+                            }).addTo(layersRef.current.atlas);
+                        }
+                    });
+                }
+
+                // 3. Hvis Finderen er på Tentacles-fanen -> Tegn rækkevidden (1 Mile eller 15 Miles) omkring Finderen
+                if (activeTool === 'questions' && questionTab === 'tentacles') {
+                    const tMeta = OFFICIAL_TENTACLE_QUESTIONS.find(x => x.id === qTentacleId);
+                    if (tMeta) {
+                        const reachCircle = turf.circle([myCoords.lng, myCoords.lat], tMeta.radiusKm, { steps: 64, units: 'kilometers' });
+                        L.geoJSON(reachCircle, {
+                            interactive: false,
+                            style: {
+                                color: '#a855f7',
+                                weight: 3,
+                                dashArray: '6, 6',
+                                fillColor: '#a855f7',
+                                fillOpacity: 0.1
+                            }
+                        }).addTo(layersRef.current.atlas);
+                    }
+                }
+
+                // 4. Tegn direkte stiplet vektor-linje fra spilleren til nærmeste punkt i kategorien
+                if (nearest) {
+                    L.polyline([[myCoords.lat, myCoords.lng], [nearest.lat, nearest.lng]], {
+                        color: '#2EB85C',
+                        weight: 3.5,
+                        dashArray: '6, 6',
+                        interactive: false
+                    }).addTo(layersRef.current.atlas);
+                }
+
+                // 5. Tegn alle punkter i kategorien med afstandsmærke fra spillerens position
+                const myPt = turf.point([myCoords.lng, myCoords.lat]);
+                list.forEach((item, idx) => {
+                    const dKm = turf.distance(myPt, turf.point([item.lng, item.lat]), { units: 'kilometers' });
+                    const dText = dKm < 1 ? `${Math.round(dKm * 1000)}m` : `${dKm.toFixed(1)}km`;
+                    const isNearest = nearest && nearest.index === idx;
+
+                    const pinIcon = L.divIcon({
+                        className: '',
+                        html: `
+                            <div class="jl-atlas-pin ${isNearest ? 'nearest-highlight' : ''}">
+                                <span>${catMeta.icon}</span>
+                                <span>${item.name}</span>
+                                <span style="opacity:0.8; font-size:10px; padding-left:3px;">(${dText})</span>
+                            </div>
+                        `,
+                        iconSize: [0, 0]
+                    });
+
+                    L.marker([item.lat, item.lng], {
+                        icon: pinIcon,
+                        zIndexOffset: isNearest ? 850 : 400
+                    }).addTo(layersRef.current.atlas);
+                });
+            }, [effectiveDynamicCategory, dynamicCategoryMeta, myCoords, showAtlasVoronoi, activeTool, questionTab, qTentacleId]);
+
             return (
                 <div className={`relative w-full h-full overflow-hidden select-none ${mapTheme}`}>
                     {/* Full-Screen Leaflet Map */}
@@ -3516,15 +3920,18 @@
                         </div>
                     )}
 
-                    {}
-                    {/* TOP BROADCAST BAR (Mobile-First Compact & Responsive Jet Lag TV HUD) */}
-                    <div className="absolute top-0 left-0 right-0 z-[500] px-2 pt-1.5 sm:p-3 safe-top pointer-events-none flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-1.5 sm:gap-2">
-                        {/* Top Row on Mobile: Room Code + Role + Timer in one sleek bar */}
-                        <div className="pointer-events-auto flex items-center justify-between gap-1.5 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl px-2.5 py-1.5 shadow-xl">
+                    {/* TOP BROADCAST BAR (Ultra-Clean Single-Row Mobile HUD + Burger Menu) */}
+                    <div className="absolute top-0 left-0 right-0 z-[500] px-2 pt-1.5 sm:p-3 safe-top pointer-events-none">
+                        <div className="pointer-events-auto flex items-center justify-between gap-1.5 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl px-2.5 py-1.5 shadow-2xl backdrop-blur-md">
+                            {/* Left: Room Code + Role Badge */}
                             <div className="flex items-center gap-1.5 min-w-0">
                                 <button
-                                    onClick={() => setActiveTool(activeTool === 'room' ? null : 'room')}
-                                    className="bg-jl-dark border border-jl-yellow/50 px-2 py-1 rounded-xl text-left hover:border-jl-yellow transition-colors shrink-0"
+                                    onClick={() => {
+                                        JetLagAudio.playUiClick();
+                                        setBurgerMenuOpen(false);
+                                        setActiveTool(activeTool === 'room' ? null : 'room');
+                                    }}
+                                    className="bg-jl-dark border border-jl-yellow/50 px-2 py-1 rounded-xl text-left hover:border-jl-yellow transition-colors shrink-0 active:scale-95"
                                     title="Åbn Rum & Hold-oversigt"
                                 >
                                     <div className="text-[8px] sm:text-[9px] font-display font-bold uppercase text-jl-cream/60 leading-none">
@@ -3543,13 +3950,13 @@
                                     {myRole === 'hider' ? '🏃 GEMMER' : '🔍 FINDER'}
                                 </div>
 
-                                <div className="hidden md:block pl-1 truncate">
+                                <div className="hidden md:block pl-1.5 truncate">
                                     <div className="font-display font-black text-sm text-jl-cream leading-none uppercase truncate">
                                         {playerName} ({myTeam === 'teamA' ? 'Hold 1' : 'Hold 2'})
                                     </div>
                                     <div className="text-[10px] font-bold text-jl-cream/70 truncate">
                                         {myRole === 'hider'
-                                            ? `Overvåger ${chasersWithDistance.length} finder(e)`
+                                            ? `Overvåger ${chasersWithDistance.length} finder(e) live`
                                             : activeHiderTarget.isBot
                                             ? '🤖 Auto-Svar (Bot-Gemmer)'
                                             : `📡 Forbundet til ${activeHiderTarget.name}`}
@@ -3557,114 +3964,211 @@
                                 </div>
                             </div>
 
-                            {/* Compact Timer inside same bar on Mobile */}
-                            <div className="flex items-center gap-1.5 shrink-0 border-l border-jl-cream/20 pl-2">
-                                <div className="flex flex-col items-end">
-                                    <span className="text-[8px] sm:text-[10px] font-display font-black uppercase tracking-widest text-jl-yellow leading-none">
+                            {/* Center/Right: 45-Min Timer + Burger Menu Button */}
+                            <div className="flex items-center gap-2 shrink-0">
+                                <div
+                                    onClick={handleTogglePhase}
+                                    className="flex flex-col items-end cursor-pointer bg-jl-dark/80 hover:bg-jl-dark px-2.5 py-1 rounded-xl border border-jl-cream/15 active:scale-95"
+                                    title="Tryk for at skifte mellem 45m Gemme-tid og Jagt"
+                                >
+                                    <span className="text-[8px] sm:text-[9px] font-display font-black uppercase tracking-widest text-jl-yellow leading-none">
                                         {roomState.phase === 'hiding' ? '⏱ GEMME-TID' : '🚨 JAGT AKTIV'}
                                     </span>
-                                    <span className="font-display font-black text-xl sm:text-2xl text-jl-cream leading-none tracking-wider">
+                                    <span className="font-display font-black text-lg sm:text-2xl text-jl-cream leading-none tracking-wider">
                                         {roomState.phase === 'hiding' ? clockDisplay : 'JAGT'}
                                     </span>
                                 </div>
+
+                                {/* Burger Menu Toggle Button */}
                                 <button
-                                    onClick={handleTogglePhase}
-                                    className="bg-jl-orange hover:bg-amber-600 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
+                                    onClick={() => {
+                                        JetLagAudio.playUiClick(760);
+                                        setBurgerMenuOpen(prev => !prev);
+                                    }}
+                                    className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 flex flex-col items-center justify-center gap-1 transition-all active:scale-95 relative ${
+                                        burgerMenuOpen
+                                            ? 'bg-jl-yellow text-jl-navy border-white'
+                                            : 'bg-jl-dark text-jl-cream border-jl-cream/35 hover:border-jl-yellow'
+                                    }`}
+                                    title="Åbn Menu & Indstillinger"
                                 >
-                                    {roomState.phase === 'hiding' ? 'Start Jagt' : '45m Ur'}
-                                </button>
-                                <button
-                                    onClick={handleNextRoundSwapTeams}
-                                    className="bg-jl-yellow hover:bg-amber-300 text-jl-navy font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
-                                    title="Start næste runde og byt hold"
-                                >
-                                    🔄 Runde
-                                </button>
-                                <button
-                                    onClick={handleStartNewGame}
-                                    className="bg-jl-green hover:bg-emerald-500 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
-                                    title="Start helt nyt spil fra Runde 1"
-                                >
-                                    🆕 Nyt Spil
-                                </button>
-                                <button
-                                    onClick={handleLeaveAndCleanupRoom}
-                                    className="bg-jl-red hover:bg-red-600 text-white font-display font-black text-[10px] uppercase px-2 py-1 rounded-lg shadow"
-                                    title="Forlad spillet og gå til lobbyen"
-                                >
-                                    🚪 Forlad
+                                    <span className="font-display font-black text-xl leading-none">
+                                        {burgerMenuOpen ? '✕' : '☰'}
+                                    </span>
+                                    {manualGpsMode && (
+                                        <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-jl-red border border-white animate-ping" />
+                                    )}
                                 </button>
                             </div>
                         </div>
 
-                        {/* Second Compact Pill Row: Sound, Music, Map Style, Stations & GPS Controls */}
-                        <div className="pointer-events-auto flex items-center justify-between sm:justify-end gap-1 bg-jl-navy/95 border-2 border-jl-cream rounded-2xl p-1 shadow-xl overflow-x-auto no-scrollbar">
-                            <button
-                                onClick={() => {
-                                    const nextMuted = !soundMuted;
-                                    setSoundMuted(nextMuted);
-                                    JetLagAudio.muted = nextMuted;
-                                    if (!nextMuted) JetLagAudio.playIntroStinger();
-                                }}
-                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
-                                    !soundMuted ? 'bg-jl-green text-white' : 'bg-jl-dark text-jl-cream/50'
-                                }`}
-                                title="Slå Jet Lag lydeffekter til/fra"
-                            >
-                                {!soundMuted ? '🔊 SFX' : '🔇 SFX'}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    const active = JetLagAudio.toggleBackgroundMusic();
-                                    setMusicPlaying(active);
-                                }}
-                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
-                                    musicPlaying ? 'bg-jl-yellow text-jl-navy animate-pulse' : 'bg-jl-dark text-jl-cream/70'
-                                }`}
-                                title="Spil Jet Lag taktisk baggrundsmusik"
-                            >
-                                {musicPlaying ? '🎵 Musik ON' : '🎵 Musik'}
-                            </button>
-                            <button
-                                onClick={() => setMapTheme(t => t === 'map-mint' ? 'map-clean' : t === 'map-clean' ? 'map-dark' : 'map-mint')}
-                                className="px-2 py-1 rounded-xl bg-jl-dark text-jl-cream font-display font-bold text-[11px] uppercase tracking-wider shrink-0"
-                            >
-                                🗺️ {mapTheme === 'map-mint' ? 'Mint' : mapTheme === 'map-clean' ? 'Kort' : 'Nat'}
-                            </button>
-                            <button
-                                onClick={() => setShowHubs(!showHubs)}
-                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
-                                    showHubs ? 'bg-jl-yellow text-jl-navy' : 'bg-jl-dark text-jl-cream/60'
-                                }`}
-                            >
-                                🚆 St.
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setManualGpsMode(!manualGpsMode);
-                                    notify(!manualGpsMode ? "Test-GPS: Tryk på kortet for at flytte dig!" : "Telefonens Live GPS er aktiv.");
-                                }}
-                                className={`px-2 py-1 rounded-xl font-display font-bold text-[11px] uppercase tracking-wider shrink-0 ${
-                                    manualGpsMode ? 'bg-jl-red text-white animate-pulse' : 'bg-jl-dark text-jl-cream/70'
-                                }`}
-                            >
-                                📍 {manualGpsMode ? 'Flyt=Tryk' : 'Live GPS'}
-                            </button>
-                        </div>
+                        {/* BURGER MENU DROPDOWN PANEL (Samler alle sekundære knapper og indstillinger pænt til mobil) */}
+                        {burgerMenuOpen && (
+                            <div className="pointer-events-auto mt-2 ml-auto w-full sm:w-80 bg-jl-navy/98 border-3 border-jl-cream rounded-3xl p-4 shadow-2xl text-jl-cream backdrop-blur-md max-h-[80vh] overflow-y-auto no-scrollbar">
+                                <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-jl-cream/15">
+                                    <div>
+                                        <div className="font-display font-black text-lg uppercase text-jl-yellow leading-none">
+                                            ⚙️ KONTROLPANEL & MENU
+                                        </div>
+                                        <div className="text-[11px] text-jl-cream/70 mt-0.5">
+                                            Spiller: <b>{playerName}</b> ({myTeam === 'teamA' ? 'Hold 1' : 'Hold 2'})
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={copyRoomCodeToClipboard}
+                                        className="bg-jl-dark hover:bg-slate-800 border border-jl-yellow/50 text-jl-yellow font-display font-black text-xs uppercase px-2.5 py-1.5 rounded-xl active:scale-95"
+                                    >
+                                        📋 Kopiér {roomCode}
+                                    </button>
+                                </div>
+
+                                {/* Spil-Styring (Fase, Næste Runde, Nyt Spil) */}
+                                <div className="text-[10px] font-display font-black uppercase tracking-wider text-jl-cream/60 mb-1.5">
+                                    🎮 RUNDE & SPIL-STYRING
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 mb-3.5">
+                                    <button
+                                        onClick={() => { handleTogglePhase(); setBurgerMenuOpen(false); }}
+                                        className="bg-jl-orange hover:bg-amber-600 text-white font-display font-black text-xs uppercase py-2.5 px-3 rounded-xl shadow flex items-center justify-center gap-1.5"
+                                    >
+                                        {roomState.phase === 'hiding' ? '🚨 Start Jagten Nu' : '⏱ Start 45m Ur'}
+                                    </button>
+                                    <button
+                                        onClick={() => { handleNextRoundSwapTeams(); setBurgerMenuOpen(false); }}
+                                        className="bg-jl-yellow hover:bg-amber-400 text-jl-navy font-display font-black text-xs uppercase py-2.5 px-3 rounded-xl shadow flex items-center justify-center gap-1.5"
+                                    >
+                                        🔄 Næste Runde (Byt)
+                                    </button>
+                                    <button
+                                        onClick={() => { handleStartNewGame(); setBurgerMenuOpen(false); }}
+                                        className="col-span-2 bg-jl-green hover:bg-emerald-500 text-white font-display font-black text-xs uppercase py-2.5 px-3 rounded-xl shadow flex items-center justify-center gap-1.5"
+                                    >
+                                        🆕 Start Helt Nyt Spil (Nulstil til Runde 1)
+                                    </button>
+                                </div>
+
+                                {/* Lyd, Musik & Kort-indstillinger */}
+                                <div className="text-[10px] font-display font-black uppercase tracking-wider text-jl-cream/60 mb-1.5">
+                                    🔊 LYD, MUSIK & KORTVISNING
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 mb-3.5">
+                                    <button
+                                        onClick={() => {
+                                            const nextMuted = !soundMuted;
+                                            setSoundMuted(nextMuted);
+                                            JetLagAudio.muted = nextMuted;
+                                            if (!nextMuted) JetLagAudio.playIntroStinger();
+                                        }}
+                                        className={`py-2 px-3 rounded-xl font-display font-bold text-xs uppercase border ${
+                                            !soundMuted ? 'bg-jl-green/25 border-jl-green text-white' : 'bg-jl-dark border-jl-cream/20 text-jl-cream/60'
+                                        }`}
+                                    >
+                                        {!soundMuted ? '🔊 Lydeffekter: TIL' : '🔇 Lydeffekter: FRA'}
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            const active = JetLagAudio.toggleBackgroundMusic();
+                                            setMusicPlaying(active);
+                                        }}
+                                        className={`py-2 px-3 rounded-xl font-display font-bold text-xs uppercase border ${
+                                            musicPlaying ? 'bg-jl-yellow text-jl-navy border-white' : 'bg-jl-dark border-jl-cream/20 text-jl-cream/80'
+                                        }`}
+                                    >
+                                        {musicPlaying ? '🎵 Musik: SPILLER' : '🎵 Musik: SLUKKET'}
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            JetLagAudio.playUiClick();
+                                            setMapTheme(t => t === 'map-mint' ? 'map-clean' : t === 'map-clean' ? 'map-dark' : 'map-mint');
+                                        }}
+                                        className="py-2 px-3 rounded-xl bg-jl-dark border border-jl-cream/25 text-jl-cream font-display font-bold text-xs uppercase"
+                                    >
+                                        🗺️ Tema: {mapTheme === 'map-mint' ? 'Jet Lag Mint' : mapTheme === 'map-clean' ? 'Normalt Kort' : 'Nat-Kort'}
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            JetLagAudio.playUiClick();
+                                            setShowHubs(!showHubs);
+                                        }}
+                                        className={`py-2 px-3 rounded-xl font-display font-bold text-xs uppercase border ${
+                                            showHubs ? 'bg-jl-yellow/20 border-jl-yellow text-jl-yellow' : 'bg-jl-dark border-jl-cream/20 text-jl-cream/60'
+                                        }`}
+                                    >
+                                        🚆 Stationer: {showHubs ? 'VIS' : 'SKJUL'}
+                                    </button>
+                                </div>
+
+                                {/* GPS & Test-Funktioner */}
+                                <div className="text-[10px] font-display font-black uppercase tracking-wider text-jl-cream/60 mb-1.5">
+                                    📍 GPS & TEST-FUNKTIONER
+                                </div>
+                                <div className="space-y-2 mb-3.5">
+                                    <button
+                                        onClick={() => {
+                                            setManualGpsMode(!manualGpsMode);
+                                            notify(!manualGpsMode ? "Test-GPS: Tryk på kortet for at flytte din brik!" : "Telefonens Live GPS er nu aktiv.");
+                                            setBurgerMenuOpen(false);
+                                        }}
+                                        className={`w-full py-2 px-3 rounded-xl font-display font-bold text-xs uppercase border flex items-center justify-between ${
+                                            manualGpsMode ? 'bg-jl-red text-white border-white' : 'bg-jl-dark border-jl-cream/20 text-jl-cream'
+                                        }`}
+                                    >
+                                        <span>📍 {manualGpsMode ? 'Test-GPS (Tryk på kort = Flyt)' : 'Brug Telefonens Live GPS'}</span>
+                                        <span className="text-[10px] bg-black/30 px-2 py-0.5 rounded">{manualGpsMode ? 'TEST' : 'LIVE'}</span>
+                                    </button>
+
+                                    {myRole === 'hider' && (
+                                        <button
+                                            onClick={() => {
+                                                setSimulateBotChasers(!simulateBotChasers);
+                                                notify(!simulateBotChasers ? "🤖 Simuleret Bot-Finder sat ind på kortet!" : "Simuleret Bot-Finder slået fra.");
+                                            }}
+                                            className={`w-full py-2 px-3 rounded-xl font-display font-bold text-xs uppercase border flex items-center justify-between ${
+                                                simulateBotChasers ? 'bg-jl-green/25 border-jl-green text-jl-green' : 'bg-jl-dark border-jl-cream/20 text-jl-cream/80'
+                                            }`}
+                                        >
+                                            <span>🤖 Simuler Bot-Finder (Solo-Test)</span>
+                                            <span className="text-[10px]">{simulateBotChasers ? 'AKTIV' : 'FRA'}</span>
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Forlad Spillet */}
+                                <button
+                                    onClick={handleLeaveAndCleanupRoom}
+                                    className="w-full bg-jl-red/20 hover:bg-jl-red text-jl-red hover:text-white border border-jl-red/50 font-display font-black text-xs uppercase py-2.5 rounded-xl transition-colors"
+                                >
+                                    🚪 Forlad Spillet (Tilbage til Lobby)
+                                </button>
+                            </div>
+                        )}
                     </div>
 
-                    {/* Floating Mobile "Center on my GPS" Button */}
-                    <button
-                        onClick={() => {
-                            if (mapInstanceRef.current) {
-                                mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 14, { duration: 0.6 });
-                            }
-                        }}
-                        className="absolute bottom-24 right-3 z-[480] pointer-events-auto w-11 h-11 rounded-2xl bg-jl-navy border-2 border-jl-cream text-jl-yellow shadow-xl flex items-center justify-center active:scale-95"
-                        title="Centrér kortet på min position"
-                    >
-                        🎯
-                    </button>
+                    {/* Floating Mobile Quick-Action Buttons (Bottom Right: Center on Me + Fit All Chasers for Hider) */}
+                    <div className="absolute bottom-24 right-2.5 z-[480] pointer-events-auto flex flex-col gap-2">
+                        {myRole === 'hider' && (
+                            <button
+                                onClick={fitMapToChasers}
+                                className="w-11 h-11 rounded-2xl bg-jl-green border-2 border-white text-white shadow-xl flex flex-col items-center justify-center active:scale-95"
+                                title="Zoom kortet så både du og alle Findere ses"
+                            >
+                                <span className="text-sm leading-none">👁️</span>
+                                <span className="font-display font-black text-[8px] uppercase leading-none mt-0.5">FINDERE</span>
+                            </button>
+                        )}
+                        <button
+                            onClick={() => {
+                                JetLagAudio.playUiClick();
+                                if (mapInstanceRef.current) {
+                                    mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 14, { duration: 0.6 });
+                                }
+                            }}
+                            className="w-11 h-11 rounded-2xl bg-jl-navy border-2 border-jl-cream text-jl-yellow shadow-xl flex items-center justify-center active:scale-95"
+                            title="Centrér kortet på min position"
+                        >
+                            🎯
+                        </button>
+                    </div>
 
                     {/* 2–5 MINUTTERS JET LAG TELEMETRI & SPÆNDINGS-OVERLAY (KAN MINIMERES SÅ KORTET KAN BRUGES) */}
                     {pendingTelemetry && !telemetryMinimized && (
@@ -3806,41 +4310,76 @@
                         </div>
                     )}
 
-                    {/* HIDER EXCLUSIVE TOP-LEFT LIVE CHASER TRACKER WIDGET */}
+                    {/* HIDER EXCLUSIVE TOP-LEFT LIVE CHASER RADAR WIDGET (ALTID SYNLIG FOR GEMMERE & MOBIL-VENLIG) */}
                     {myRole === 'hider' && (
-                        <div className="absolute top-28 sm:top-20 left-2.5 z-[480] pointer-events-auto bg-jl-navy/95 border-2 border-jl-green rounded-2xl p-2.5 sm:p-3 shadow-xl max-w-[250px] sm:max-w-xs text-jl-cream">
-                            <div className="flex items-center justify-between gap-2 mb-1">
-                                <span className="font-display font-black text-xs uppercase tracking-wider text-jl-green flex items-center gap-1">
-                                    📡 LIVE FINDER-AFSTAND
-                                </span>
-                                <span className="text-[10px] bg-jl-green/20 text-jl-green px-2 py-0.5 rounded font-bold">
-                                    500m Zone Aktiv
-                                </span>
-                            </div>
-                            {chasersWithDistance.length === 0 ? (
-                                <div className="text-xs text-jl-cream/60">
-                                    Ingen spillere på Finder-holdet endnu. (Du kan skifte rolle i Rum/Hold).
-                                </div>
-                            ) : (
-                                <div className="space-y-1.5">
-                                    {chasersWithDistance.map(ch => (
-                                        <div
-                                            key={ch.uid}
-                                            onClick={() => mapInstanceRef.current?.flyTo([ch.lat, ch.lng], 13)}
-                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl cursor-pointer border transition-colors ${
-                                                ch.distanceKm < 2
-                                                    ? 'bg-jl-red/30 border-jl-red animate-pulse'
-                                                    : 'bg-jl-dark border-jl-cream/15 hover:border-jl-yellow'
-                                            }`}
+                        <div className="absolute top-16 sm:top-20 left-2 z-[480] pointer-events-auto bg-jl-navy/95 border-2 border-jl-green rounded-2xl p-2 sm:p-3 shadow-2xl w-[225px] sm:w-72 text-jl-cream backdrop-blur-md">
+                            <div className="flex items-center justify-between gap-1.5">
+                                <button
+                                    onClick={() => setTrackerCollapsed(!trackerCollapsed)}
+                                    className="font-display font-black text-xs sm:text-sm uppercase tracking-wider text-jl-green flex items-center gap-1 text-left"
+                                >
+                                    <span>📡 FINDER-RADAR ({chasersWithDistance.length})</span>
+                                    <span className="text-[10px] text-jl-cream/60">{trackerCollapsed ? '▼' : '▲'}</span>
+                                </button>
+                                <div className="flex items-center gap-1">
+                                    {chasersWithDistance.length > 0 && (
+                                        <button
+                                            onClick={fitMapToChasers}
+                                            className="text-[10px] bg-jl-green text-white px-2 py-0.5 rounded font-display font-black uppercase shadow active:scale-95"
+                                            title="Zoom så alle Findere er synlige på kortet"
                                         >
-                                            <span className="font-bold text-xs">🔍 {ch.name}</span>
-                                            <span className="font-display font-black text-sm text-jl-yellow">
-                                                {ch.distanceKm < 1
-                                                    ? `${Math.round(ch.distanceKm * 1000)} m væk!`
-                                                    : `${ch.distanceKm.toFixed(1)} km væk`}
-                                            </span>
+                                            🔍 Vis Alle
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {!trackerCollapsed && (
+                                <div className="mt-2">
+                                    {chasersWithDistance.length === 0 ? (
+                                        <div className="bg-jl-dark/90 border border-jl-cream/15 rounded-xl p-2 text-[11px] text-jl-cream/80 space-y-1.5">
+                                            <div>
+                                                Venter på at spillere på <b>{roomState.hidingTeam === 'teamA' ? 'Hold 2 (Bravo)' : 'Hold 1 (Alpha)'}</b> tilslutter sig rummet...
+                                            </div>
+                                            <button
+                                                onClick={() => setSimulateBotChasers(true)}
+                                                className="w-full bg-jl-yellow/20 hover:bg-jl-yellow hover:text-jl-navy border border-jl-yellow/50 text-jl-yellow font-display font-black text-[11px] uppercase py-1 px-2 rounded-lg transition-colors"
+                                            >
+                                                🤖 Indsæt Bot-Finder (Test)
+                                            </button>
                                         </div>
-                                    ))}
+                                    ) : (
+                                        <div className="space-y-1.5 max-h-36 overflow-y-auto no-scrollbar">
+                                            {chasersWithDistance.map(ch => (
+                                                <div
+                                                    key={ch.uid}
+                                                    onClick={() => {
+                                                        JetLagAudio.playUiClick();
+                                                        mapInstanceRef.current?.flyTo([ch.lat, ch.lng], 14, { duration: 0.6 });
+                                                    }}
+                                                    className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl cursor-pointer border transition-colors ${
+                                                        ch.distanceKm < 2
+                                                            ? 'bg-jl-red/30 border-jl-red animate-pulse'
+                                                            : 'bg-jl-dark border-jl-cream/20 hover:border-jl-yellow'
+                                                    }`}
+                                                >
+                                                    <div className="min-w-0 pr-1">
+                                                        <div className="font-bold text-xs truncate flex items-center gap-1">
+                                                            <span>🎯 {ch.name}</span>
+                                                        </div>
+                                                        <div className="text-[9px] text-jl-cream/60 font-bold uppercase">
+                                                            Retning: {ch.compass} • {ch.secsAgo < 5 ? 'LIVE NU' : `${ch.secsAgo}s siden`}
+                                                        </div>
+                                                    </div>
+                                                    <span className="font-display font-black text-sm sm:text-base text-jl-yellow shrink-0">
+                                                        {ch.distanceKm < 1
+                                                            ? `${Math.round(ch.distanceKm * 1000)} m`
+                                                            : `${ch.distanceKm.toFixed(1)} km`}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
@@ -3848,9 +4387,9 @@
                             {pendingManualQuestions.length > 0 && (
                                 <button
                                     onClick={() => setActiveTool('hider_inbox')}
-                                    className="mt-2.5 w-full bg-jl-red hover:bg-red-600 text-white font-display font-black text-sm uppercase py-2 px-3 rounded-xl shadow-lg animate-bounce flex items-center justify-center gap-1.5"
+                                    className="mt-2 w-full bg-jl-red hover:bg-red-600 text-white font-display font-black text-xs sm:text-sm uppercase py-1.5 px-2.5 rounded-xl shadow-lg animate-bounce flex items-center justify-center gap-1"
                                 >
-                                    📸 {pendingManualQuestions.length} NYT SPØRGSMÅL FRA FINDERNE! (KLIK)
+                                    📸 {pendingManualQuestions.length} NYT SPØRGSMÅL! (SVAR HER)
                                 </button>
                             )}
                         </div>
@@ -3860,6 +4399,428 @@
                     {statusBanner && (
                         <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[600] bg-jl-yellow text-jl-navy border-2 border-jl-navy px-5 py-2 rounded-xl font-display font-black text-base sm:text-lg uppercase tracking-wide shadow-2xl jl-slanted-badge text-center max-w-md">
                             {statusBanner}
+                        </div>
+                    )}
+
+                    {}
+                    {/* DYNAMISK KORT-LAG STATUSBAR (Vises når Lufthavne, Jernbaner, Kommuner osv. er tændt på kortet) */}
+                    {effectiveDynamicCategory && dynamicCategoryMeta && (
+                        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[490] w-[94%] max-w-md pointer-events-auto">
+                            <div className="bg-jl-navy/95 border-2 border-jl-yellow rounded-2xl px-3.5 py-2 shadow-2xl text-jl-cream flex items-center justify-between gap-2 backdrop-blur-md">
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="bg-jl-yellow text-jl-navy font-display font-black text-[10px] uppercase px-1.5 py-0.5 rounded">
+                                            AKTIVT KORT-LAG
+                                        </span>
+                                        <span className="font-display font-black text-sm sm:text-base uppercase text-jl-yellow truncate">
+                                            {dynamicCategoryMeta.icon} {dynamicCategoryMeta.label}
+                                        </span>
+                                    </div>
+                                    {nearestDynamicPOI && (
+                                        <div className="text-[11px] text-jl-cream/90 truncate mt-0.5">
+                                            Nærmeste: <b className="text-jl-green">{nearestDynamicPOI.name}</b> ({nearestDynamicPOI.distanceKm < 1 ? `${Math.round(nearestDynamicPOI.distanceKm * 1000)} m` : `${nearestDynamicPOI.distanceKm.toFixed(2)} km`})
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                        onClick={() => {
+                                            JetLagAudio.playUiClick();
+                                            setShowAtlasVoronoi(!showAtlasVoronoi);
+                                        }}
+                                        className={`px-2.5 py-1.5 rounded-xl font-display font-black text-[11px] uppercase border transition-colors ${
+                                            showAtlasVoronoi
+                                                ? 'bg-jl-green text-white border-white'
+                                                : 'bg-jl-dark text-jl-cream/70 border-jl-cream/25'
+                                        }`}
+                                        title="Vis eller skjul Voronoi-skæringslinjer mellem punkterne"
+                                    >
+                                        📐 Zoner
+                                    </button>
+                                    {activeAtlasCategory && (
+                                        <button
+                                            onClick={() => {
+                                                JetLagAudio.playUiClick();
+                                                setActiveAtlasCategory(null);
+                                            }}
+                                            className="bg-jl-red hover:bg-red-600 text-white font-display font-black text-xs px-2.5 py-1.5 rounded-xl"
+                                            title="Sluk kort-lag"
+                                        >
+                                            ✕
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* FÆLLES KORT-ATLAS & SPØRGSMÅLS-OVERSIGT (Tilgængelig for BÅDE Gemmere og Findere!) */}
+                    {activeTool === 'atlas' && (
+                        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[550] w-[95%] max-w-lg bg-jl-navy border-3 border-jl-cream rounded-3xl p-4 sm:p-5 shadow-2xl text-jl-cream max-h-[72vh] flex flex-col">
+                            <div className="flex justify-between items-center mb-2.5">
+                                <div>
+                                    <span className="bg-jl-yellow text-jl-navy font-display font-black px-2 py-0.5 rounded text-[10px] uppercase">
+                                        🗺️ INTERAKTIVT KORT-ATLAS & SPØRGSMÅLS-GUIDE
+                                    </span>
+                                    <h3 className="font-display font-black text-2xl uppercase tracking-wide mt-0.5 text-jl-cream">
+                                        UDForsk KORT-LAG & SPØRGSMÅL
+                                    </h3>
+                                </div>
+                                <button onClick={() => setActiveTool(null)} className="text-jl-cream/60 hover:text-white font-bold text-xl px-2">✕</button>
+                            </div>
+
+                            {/* Skift mellem Kort-Lag (Lufthavne, Jernbaner osv.) og Alle 80 Spørgsmål */}
+                            <div className="grid grid-cols-2 gap-2 p-1 bg-jl-dark rounded-2xl mb-3 border border-jl-cream/15">
+                                <button
+                                    onClick={() => { JetLagAudio.playUiClick(); setAtlasModalTab('map_layers'); }}
+                                    className={`py-2 rounded-xl font-display font-black uppercase text-xs sm:text-sm transition-all ${
+                                        atlasModalTab === 'map_layers'
+                                            ? 'bg-jl-yellow text-jl-navy shadow'
+                                            : 'text-jl-cream/70 hover:text-white'
+                                    }`}
+                                >
+                                    🗺️ KORT-LAG (LUFTHAVNE, TOG M.M.)
+                                </button>
+                                <button
+                                    onClick={() => { JetLagAudio.playUiClick(); setAtlasModalTab('all_questions'); }}
+                                    className={`py-2 rounded-xl font-display font-black uppercase text-xs sm:text-sm transition-all ${
+                                        atlasModalTab === 'all_questions'
+                                            ? 'bg-jl-green text-white shadow'
+                                            : 'text-jl-cream/70 hover:text-white'
+                                    }`}
+                                >
+                                    📘 ALLE 80 SPØRGSMÅL & REGLER
+                                </button>
+                            </div>
+
+                            {atlasModalTab === 'map_layers' ? (
+                                <div className="flex-1 overflow-y-auto pr-1 no-scrollbar space-y-2.5">
+                                    <div className="bg-jl-dark/90 p-3 rounded-2xl border border-jl-cream/15 flex items-center justify-between gap-2">
+                                        <div className="text-xs text-jl-cream/85 leading-snug">
+                                            Vælg en kategori herunder for at vise <b>alle lokationer, jernbaner, afstande og Voronoi-skæringslinjer</b> direkte på kortet!
+                                        </div>
+                                        {activeAtlasCategory && (
+                                            <button
+                                                onClick={() => setActiveAtlasCategory(null)}
+                                                className="shrink-0 bg-jl-red text-white font-display font-black text-xs uppercase px-3 py-1.5 rounded-xl"
+                                            >
+                                                Sluk Lag
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {ATLAS_CATEGORIES.map(cat => {
+                                            const isSelected = activeAtlasCategory === cat.id;
+                                            const count = (BUILTIN_GEO_DATA[cat.id] || []).length;
+                                            const near = getNearestPOI(myCoords.lat, myCoords.lng, BUILTIN_GEO_DATA[cat.id] || []);
+                                            return (
+                                                <button
+                                                    key={cat.id}
+                                                    onClick={() => {
+                                                        JetLagAudio.playUiClick();
+                                                        if (isSelected) {
+                                                            setActiveAtlasCategory(null);
+                                                        } else {
+                                                            setActiveAtlasCategory(cat.id);
+                                                            notify(`🗺️ Viser ${cat.label} på kortet!`);
+                                                        }
+                                                    }}
+                                                    className={`p-2.5 rounded-2xl border-2 text-left transition-all flex flex-col justify-between ${
+                                                        isSelected
+                                                            ? 'bg-jl-yellow text-jl-navy border-white shadow-lg scale-[1.02]'
+                                                            : 'bg-jl-dark hover:bg-slate-800 text-jl-cream border-jl-cream/15'
+                                                    }`}
+                                                >
+                                                    <div>
+                                                        <div className="flex items-center justify-between gap-1">
+                                                            <span className="font-display font-black text-sm sm:text-base uppercase leading-tight">
+                                                                {cat.icon} {cat.label}
+                                                            </span>
+                                                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${
+                                                                isSelected ? 'bg-jl-navy text-jl-yellow' : 'bg-jl-navy text-jl-cream/70'
+                                                            }`}>
+                                                                {count}
+                                                            </span>
+                                                        </div>
+                                                        <div className={`text-[10px] mt-0.5 line-clamp-1 ${isSelected ? 'text-jl-navy/80 font-bold' : 'text-jl-cream/60'}`}>
+                                                            {cat.desc}
+                                                        </div>
+                                                    </div>
+                                                    {near && (
+                                                        <div className={`mt-2 pt-1.5 border-t text-[10px] font-bold truncate ${
+                                                            isSelected ? 'border-jl-navy/20 text-jl-navy' : 'border-jl-cream/10 text-jl-yellow'
+                                                        }`}>
+                                                            📍 Nærmeste: {near.name} ({near.distanceKm.toFixed(1)} km)
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex-1 overflow-y-auto pr-1 no-scrollbar space-y-3 text-xs">
+                                    <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-cream/15">
+                                        <div className="font-display font-black text-base text-jl-yellow uppercase mb-1">
+                                            🧩 1. MATCHING (20 SPØRGSMÅL • GEMMER TRÆKKER 3, BEHOLDER 1)
+                                        </div>
+                                        <p className="text-jl-cream/80 mb-2">
+                                            Format: <i>"Er din nærmeste ___ den samme som vores ___?"</i> Dela kortet op i eksakte Voronoi-zoner. Tryk på en kategori for at se grænserne på kortet:
+                                        </p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {OFFICIAL_MATCHING_QUESTIONS.map(q => (
+                                                <button
+                                                    key={q.id}
+                                                    onClick={() => {
+                                                        if (BUILTIN_GEO_DATA[q.id]) {
+                                                            setActiveAtlasCategory(q.id);
+                                                            setAtlasModalTab('map_layers');
+                                                        }
+                                                    }}
+                                                    className="bg-jl-navy hover:bg-jl-yellow hover:text-jl-navy border border-jl-cream/20 px-2.5 py-1 rounded-lg font-bold transition-colors"
+                                                >
+                                                    {q.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-cream/15">
+                                        <div className="font-display font-black text-base text-jl-orange uppercase mb-1">
+                                            📏 2. MEASURING (20 SPØRGSMÅL • GEMMER TRÆKKER 3, BEHOLDER 1)
+                                        </div>
+                                        <p className="text-jl-cream/80 mb-2">
+                                            Format: <i>"Sammenlignet med os, er du tættere på eller længere fra ___?"</i> Tegner afstandscirkler om alle punkter i kategorien:
+                                        </p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {OFFICIAL_MEASURING_QUESTIONS.map((q, i) => (
+                                                <button
+                                                    key={`${q.id}_${i}`}
+                                                    onClick={() => {
+                                                        if (BUILTIN_GEO_DATA[q.id]) {
+                                                            setActiveAtlasCategory(q.id);
+                                                            setAtlasModalTab('map_layers');
+                                                        }
+                                                    }}
+                                                    className="bg-jl-navy hover:bg-jl-orange hover:text-white border border-jl-cream/20 px-2.5 py-1 rounded-lg font-bold transition-colors"
+                                                >
+                                                    {q.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-cream/15">
+                                        <div className="font-display font-black text-base text-jl-green uppercase mb-1">
+                                            🎯 3. RADARS & 🌡️ 4. THERMOMETERS (GEMMER TRÆKKER 2, BEHOLDER 1)
+                                        </div>
+                                        <p className="text-jl-cream/80">
+                                            <b>Radars (10 stk):</b> 400m, 800m, 1.6km, 4.8km, 8km, 16.1km, 40.2km, 80.5km, 160.9km + Valgfri.<br/>
+                                            <b>Thermometers (4 stk):</b> Rejs 800m, 4.8km, 16.1km eller 80.5km og få at vide om du er Varmere eller Koldere.
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-cream/15">
+                                        <div className="font-display font-black text-base text-purple-400 uppercase mb-1">
+                                            🐙 5. TENTACLES (GEMMER TRÆKKER 4, BEHOLDER 2) & 📸 6. PHOTOS (TRÆK 1)
+                                        </div>
+                                        <p className="text-jl-cream/80 mb-2">
+                                            <b>Tentacles:</b> Museer, Biblioteker, Biografer, Hospitaler (1,6 km) & Metro, Togstationer, Zoo, Akvarium, Forlystelsesparker (24,1 km).<br/>
+                                            <b>Photos (18 stk):</b> Bygning fra station, Bredeste gade, Et træ, Højeste struktur, Selfie, Himlen, 2/5 bygninger, Restaurant, Park, Supermarkedsgang, Togperron m.fl.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {}
+                    {/* GEMMERENS UNDER-MENU: TAKTIK, DE ANDRES ZONER & 500M GEMMEZONE */}
+                    {myRole === 'hider' && activeTool === 'hider_tactics' && (
+                        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[550] w-[94%] max-w-md bg-jl-navy border-3 border-jl-cream rounded-3xl p-5 shadow-2xl text-jl-cream max-h-[70vh] flex flex-col">
+                            <div className="flex justify-between items-center mb-3">
+                                <div>
+                                    <span className="bg-jl-green text-white font-display font-black px-2 py-0.5 rounded text-[10px] uppercase">
+                                        🛡️ GEMMER UNDER-MENU
+                                    </span>
+                                    <h3 className="font-display font-black text-2xl uppercase tracking-wide mt-0.5 text-jl-yellow">
+                                        TAKTIK & FINDERNES ZONER
+                                    </h3>
+                                </div>
+                                <button onClick={() => setActiveTool(null)} className="text-jl-cream/60 hover:text-white font-bold text-xl px-2">✕</button>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto pr-1 no-scrollbar space-y-3">
+                                {/* 1. Din 500m Gemmezone & Nærmeste Station */}
+                                <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-green/40 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-display font-black text-base uppercase text-jl-green">
+                                            🛡️ DIN 500M GEMME-ZONE
+                                        </span>
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-jl-green/20 text-jl-green">
+                                            {hiderLockedSpot ? 'LÅST FAST' : 'FØLGER GPS'}
+                                        </span>
+                                    </div>
+                                    {hiderNearestStation && (
+                                        <div className="text-xs text-jl-cream/85">
+                                            Nærmeste togstation: <b className="text-jl-yellow">{hiderNearestStation.name}</b> ({Math.round(hiderNearestStation.distanceKm * 1000)} m væk)
+                                            {hiderNearestStation.distanceKm <= 0.5 ? (
+                                                <span className="ml-1 text-jl-green font-bold">✓ Inden for 500m!</span>
+                                            ) : (
+                                                <span className="ml-1 text-jl-orange font-bold">⚠️ Mere end 500m fra station</span>
+                                            )}
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={() => {
+                                            JetLagAudio.playUiClick();
+                                            if (hiderLockedSpot) {
+                                                setHiderLockedSpot(null);
+                                                notify("500m Gemme-zone følger nu din GPS igen.");
+                                            } else {
+                                                setHiderLockedSpot({ lat: myCoords.lat, lng: myCoords.lng });
+                                                notify("🛡️ Dit 500m Gemmested er nu låst fast på kortet!");
+                                            }
+                                        }}
+                                        className={`w-full py-2.5 rounded-xl font-display font-black text-sm uppercase shadow transition-colors ${
+                                            hiderLockedSpot
+                                                ? 'bg-jl-orange text-white'
+                                                : 'bg-jl-green text-white hover:bg-emerald-500'
+                                        }`}
+                                    >
+                                        {hiderLockedSpot ? '🔓 Lås 500m Zone Op (Følg GPS)' : '🔒 Lås 500m Zone Fast Her'}
+                                    </button>
+                                </div>
+
+                                {/* 2. Se Findernes Røde Udelukkelseszoner på kortet */}
+                                <div className="bg-jl-dark p-3.5 rounded-2xl border border-jl-cream/20 space-y-2.5">
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <div className="font-display font-black text-base uppercase text-jl-red">
+                                                👁️ FINDERNES RØDE ZONER ({mapObjects.length})
+                                            </div>
+                                            <div className="text-[11px] text-jl-cream/70">
+                                                Se præcis hvilke områder Finderne har udelukket indtil videre
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                JetLagAudio.playUiClick();
+                                                setHiderShowSeekerZones(!hiderShowSeekerZones);
+                                            }}
+                                            className={`px-3 py-1.5 rounded-xl font-display font-black text-xs uppercase border ${
+                                                hiderShowSeekerZones
+                                                    ? 'bg-jl-red text-white border-white'
+                                                    : 'bg-jl-navy text-jl-cream/75 border-jl-cream/30'
+                                            }`}
+                                        >
+                                            {hiderShowSeekerZones ? 'VISES PÅ KORT ✓' : 'VIS PÅ KORT'}
+                                        </button>
+                                    </div>
+
+                                    {mapObjects.length === 0 ? (
+                                        <div className="text-xs text-jl-cream/50 italic py-2 text-center">
+                                            Finderne har ikke tegnet nogen røde zoner endnu.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-1.5 max-h-36 overflow-y-auto no-scrollbar pt-1">
+                                            {mapObjects.map(obj => (
+                                                <div key={obj.id} className="bg-jl-navy px-3 py-2 rounded-xl border border-jl-cream/15 flex items-center justify-between text-xs">
+                                                    <span className="font-bold text-jl-cream truncate">{obj.label || obj.type}</span>
+                                                    <span className="text-[10px] text-jl-cream/50 shrink-0 ml-2">Af {obj.createdByName}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 3. Hurtige genveje til Hold, Bot-Finder & Kort-zoom */}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={() => { fitMapToChasers(); setActiveTool(null); }}
+                                        className="bg-jl-dark hover:bg-slate-800 border border-jl-cream/25 py-2.5 px-3 rounded-xl font-display font-black text-xs uppercase text-jl-yellow"
+                                    >
+                                        🔍 Zoom til Findere
+                                    </button>
+                                    <button
+                                        onClick={() => setActiveTool('room')}
+                                        className="bg-jl-dark hover:bg-slate-800 border border-jl-cream/25 py-2.5 px-3 rounded-xl font-display font-black text-xs uppercase text-jl-cream"
+                                    >
+                                        👥 Rum & Hold (R{roomState.roundNumber || 1})
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* FINDERENS UNDER-MENU: MANUELLE KORT-VÆRKTØJER & AKTIVE ZONER */}
+                    {myRole === 'seeker' && activeTool === 'seeker_tools' && (
+                        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[550] w-[94%] max-w-md bg-jl-navy border-3 border-jl-cream rounded-3xl p-5 shadow-2xl text-jl-cream">
+                            <div className="flex justify-between items-center mb-3">
+                                <div>
+                                    <span className="bg-jl-yellow text-jl-navy font-display font-black px-2 py-0.5 rounded text-[10px] uppercase">
+                                        📐 FINDER VÆRKTØJSKASSE
+                                    </span>
+                                    <h3 className="font-display font-black text-2xl uppercase tracking-wide mt-0.5 text-jl-cream">
+                                        KORT-VÆRKTØJER & ZONER
+                                    </h3>
+                                </div>
+                                <button onClick={() => setActiveTool(null)} className="text-jl-cream/60 hover:text-white font-bold text-xl px-2">✕</button>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2.5 mb-3">
+                                <button
+                                    onClick={() => {
+                                        if (mapInstanceRef.current) {
+                                            const c = mapInstanceRef.current.getCenter();
+                                            setRadiusCenter({ lat: c.lat, lng: c.lng });
+                                        }
+                                        setActiveTool('radius');
+                                    }}
+                                    className="bg-jl-dark hover:bg-slate-800 border-2 border-jl-cream/20 hover:border-jl-yellow p-3.5 rounded-2xl text-left transition-all"
+                                >
+                                    <div className="text-2xl mb-1">🎯</div>
+                                    <div className="font-display font-black text-base uppercase text-jl-yellow">MANUEL RADIUS</div>
+                                    <div className="text-[11px] text-jl-cream/70">Tegn rød cirkel eller omvendt cirkel</div>
+                                </button>
+
+                                <button
+                                    onClick={() => setActiveTool('polygon')}
+                                    className="bg-jl-dark hover:bg-slate-800 border-2 border-jl-cream/20 hover:border-jl-red p-3.5 rounded-2xl text-left transition-all"
+                                >
+                                    <div className="text-2xl mb-1">✏️</div>
+                                    <div className="font-display font-black text-base uppercase text-jl-red">TEGN RØD ZONE</div>
+                                    <div className="text-[11px] text-jl-cream/70">Frihåndspolygon punkt-for-punkt</div>
+                                </button>
+
+                                <button
+                                    onClick={() => setActiveTool('thermometer')}
+                                    className="bg-jl-dark hover:bg-slate-800 border-2 border-jl-cream/20 hover:border-jl-green p-3.5 rounded-2xl text-left transition-all"
+                                >
+                                    <div className="text-2xl mb-1">🌡️</div>
+                                    <div className="font-display font-black text-base uppercase text-jl-green">TERMOMETER</div>
+                                    <div className="text-[11px] text-jl-cream/70">Manuel Varmere/Koldere skæring</div>
+                                </button>
+
+                                <button
+                                    onClick={() => setActiveTool('layers')}
+                                    className="bg-jl-dark hover:bg-slate-800 border-2 border-jl-cream/20 hover:border-jl-yellow p-3.5 rounded-2xl text-left transition-all relative"
+                                >
+                                    <div className="text-2xl mb-1">🗂️</div>
+                                    <div className="font-display font-black text-base uppercase text-jl-cream">
+                                        ZONER ({mapObjects.length})
+                                    </div>
+                                    <div className="text-[11px] text-jl-cream/70">Se, fortryd eller ryd røde zoner</div>
+                                </button>
+                            </div>
+
+                            <button
+                                onClick={() => setActiveTool('room')}
+                                className="w-full bg-jl-dark hover:bg-slate-800 border border-jl-cream/25 py-2.5 rounded-xl font-display font-black text-sm uppercase text-jl-yellow flex items-center justify-center gap-2"
+                            >
+                                <span>👥 Åbn Rum, Hold & Runde-skift (Runde {roomState.roundNumber || 1})</span>
+                            </button>
                         </div>
                     )}
 
@@ -4765,248 +5726,177 @@
                     {}
                     {myRole === 'seeker' ? (
                         /* =====================================================================
-                           SEEKER (FINDER) INTERFACE DOCK: Question Menu + Map Plotting Tools
+                           SEEKER (FINDER) BOTTOM NAVIGATION DOCK (Ren, overskuelig & mobiloptimeret)
                            ===================================================================== */
-                        <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1 sm:gap-3 px-1.5 safe-bottom pointer-events-auto max-w-full">
-                            {/* 0. Room & Teams Button */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'room' ? null : 'room')}
-                                    className={`jl-hex-outer ${activeTool === 'room' ? 'active-hex' : ''}`}
-                                    title="Privat Rum, Hold & Runde-skift"
-                                >
-                                    <div className="jl-hex-inner bg-jl-navy text-jl-yellow">
-                                        <span className="font-display font-black text-base leading-none">R{roomState.roundNumber || 1}</span>
-                                        <span className="text-[10px] font-bold text-jl-cream">HOLD</span>
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    RUM / HOLD
-                                </span>
-                            </div>
-
-                            {/* 1. ALL QUESTIONS MENU (AUTO-RESPONDER + PHOTOS) */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'questions' ? null : 'questions')}
-                                    className={`jl-hex-outer ${activeTool === 'questions' ? 'active-hex' : ''}`}
-                                    title="Spørgsmåls-Menu: Auto-Radar, Termometer, Matching, Measuring, Tentacles & Foto"
-                                >
-                                    <div className="jl-hex-inner bg-jl-orange text-jl-cream">
-                                        <span className="font-display font-black text-2xl leading-none">?</span>
-                                        <span className="text-[9px] font-black uppercase">AUTO</span>
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-yellow text-jl-navy font-display font-black text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-navy shadow">
-                                    SPØRGSMÅL
-                                </span>
-                            </div>
-
-                            {/* 2. Manual Radius Tool */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
+                        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 z-[500] px-2 safe-bottom pointer-events-auto w-full max-w-md">
+                            <div className="jl-dock-bar rounded-3xl p-1.5 grid grid-cols-4 gap-1.5">
+                                {/* 1. Spørgsmål (Auto-Svar + 80 Officielle Spørgsmål) */}
                                 <button
                                     onClick={() => {
-                                        if (activeTool !== 'radius' && mapInstanceRef.current) {
-                                            const c = mapInstanceRef.current.getCenter();
-                                            setRadiusCenter({ lat: c.lat, lng: c.lng });
-                                        }
-                                        setActiveTool(activeTool === 'radius' ? null : 'radius');
+                                        JetLagAudio.playUiClick();
+                                        setActiveTool(activeTool === 'questions' ? null : 'questions');
                                     }}
-                                    className={`jl-hex-outer ${activeTool === 'radius' ? 'active-hex' : ''}`}
-                                    title="Tegn Manuel Radius"
+                                    className={`jl-dock-item ${activeTool === 'questions' ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
                                 >
-                                    <div className="jl-hex-inner bg-jl-navy text-jl-cream">
-                                        <svg className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="2.4" viewBox="0 0 24 24">
-                                            <circle cx="12" cy="12" r="9" />
-                                            <circle cx="12" cy="12" r="3" fill="currentColor" />
-                                        </svg>
-                                    </div>
+                                    <span className="text-xl leading-none">❓</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        SPØRGSMÅL
+                                    </span>
+                                    <span className="text-[9px] opacity-75 font-bold leading-none mt-0.5">
+                                        Auto-Svar
+                                    </span>
                                 </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    RADIUS
-                                </span>
-                            </div>
 
-                            {/* 3. Freehand Red Zone Polygon */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'polygon' ? null : 'polygon')}
-                                    className={`jl-hex-outer ${activeTool === 'polygon' ? 'active-hex' : ''}`}
-                                    title="Tegn Rød Zone manuelt"
-                                >
-                                    <div className="jl-hex-inner bg-jl-red text-jl-cream">
-                                        <svg className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="2.4" viewBox="0 0 24 24">
-                                            <polygon points="12 2 22 8.5 18 21 6 21 2 8.5 12 2" />
-                                        </svg>
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    TEGN ZONE
-                                </span>
-                            </div>
-
-                            {/* 4. Active Zones List / Undo */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'layers' ? null : 'layers')}
-                                    className={`jl-hex-outer ${activeTool === 'layers' ? 'active-hex' : ''}`}
-                                    title="Administrer og slet røde zoner"
-                                >
-                                    <div className="jl-hex-inner bg-jl-dark text-jl-cream relative">
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
-                                            <polygon points="12 2 2 7 12 12 22 7 12 2" />
-                                            <polyline points="2 17 12 22 22 17" />
-                                            <polyline points="2 12 12 17 22 12" />
-                                        </svg>
-                                        {mapObjects.length > 0 && (
-                                            <span className="absolute top-1.5 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full">
-                                                {mapObjects.length}
-                                            </span>
-                                        )}
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    ZONER ({mapObjects.length})
-                                </span>
-                            </div>
-
-                            {/* 5. Live Chat */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
+                                {/* 2. Kort-Atlas (Lufthavne, Jernbaner, Kommuner m.m.) */}
                                 <button
                                     onClick={() => {
+                                        JetLagAudio.playUiClick();
+                                        setActiveTool(activeTool === 'atlas' ? null : 'atlas');
+                                    }}
+                                    className={`jl-dock-item ${activeTool === 'atlas' || activeAtlasCategory ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
+                                >
+                                    <span className="text-xl leading-none">🗺️</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        KORT-ATLAS
+                                    </span>
+                                    <span className="text-[9px] opacity-75 font-bold leading-none mt-0.5">
+                                        {activeAtlasCategory ? 'Lag Aktivt' : 'Tog & POI'}
+                                    </span>
+                                </button>
+
+                                {/* 3. Under-menu: Værktøjer & Zoner (Radius, Tegn, Termometer, Zoner, Hold) */}
+                                <button
+                                    onClick={() => {
+                                        JetLagAudio.playUiClick();
+                                        const isSubOpen = ['seeker_tools', 'radius', 'polygon', 'thermometer', 'layers', 'room'].includes(activeTool);
+                                        setActiveTool(isSubOpen ? null : 'seeker_tools');
+                                    }}
+                                    className={`jl-dock-item ${['seeker_tools', 'radius', 'polygon', 'thermometer', 'layers', 'room'].includes(activeTool) ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
+                                >
+                                    <span className="text-xl leading-none">📐</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        VÆRKTØJER
+                                    </span>
+                                    <span className="text-[9px] opacity-75 font-bold leading-none mt-0.5">
+                                        Zoner ({mapObjects.length})
+                                    </span>
+                                    {mapObjects.length > 0 && (
+                                        <span className="absolute top-1 right-2 bg-jl-red text-white text-[9px] font-black px-1.5 rounded-full">
+                                            {mapObjects.length}
+                                        </span>
+                                    )}
+                                </button>
+
+                                {/* 4. Live Chat */}
+                                <button
+                                    onClick={() => {
+                                        JetLagAudio.playUiClick();
                                         setUnreadCount(0);
                                         setActiveTool(activeTool === 'chat' ? null : 'chat');
                                     }}
-                                    className={`jl-hex-outer ${activeTool === 'chat' ? 'active-hex' : ''}`}
-                                    title="Åbn Spil-Chat"
+                                    className={`jl-dock-item ${activeTool === 'chat' ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
                                 >
-                                    <div className="jl-hex-inner bg-jl-yellow text-jl-navy relative">
-                                        <svg className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                        </svg>
-                                        {unreadCount > 0 && (
-                                            <span className="absolute top-1.5 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
-                                                {unreadCount}
-                                            </span>
-                                        )}
-                                    </div>
+                                    <span className="text-xl leading-none">💬</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        CHAT
+                                    </span>
+                                    <span className="text-[9px] opacity-75 font-bold leading-none mt-0.5">
+                                        Live Comms
+                                    </span>
+                                    {unreadCount > 0 && (
+                                        <span className="absolute top-1 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
+                                            {unreadCount}
+                                        </span>
+                                    )}
                                 </button>
-                                <span className="mt-1 bg-jl-navy text-jl-yellow font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-yellow/50">
-                                    CHAT
-                                </span>
                             </div>
                         </div>
                     ) : (
                         /* =====================================================================
-                           HIDER (GEMMER) INTERFACE DOCK: Dedicated Runner Surveillance Controls
+                           HIDER (GEMMER) BOTTOM NAVIGATION DOCK:
+                           1. Indbakke | 2. Spørgsmål & Kort-Atlas | 3. Taktik & Zoner (Undermenu) | 4. Chat
                            ===================================================================== */
-                        <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-end gap-1.5 sm:gap-3 px-2 safe-bottom pointer-events-auto max-w-full">
-                            {/* 0. Room & Teams */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'room' ? null : 'room')}
-                                    className={`jl-hex-outer ${activeTool === 'room' ? 'active-hex' : ''}`}
-                                >
-                                    <div className="jl-hex-inner bg-jl-navy text-jl-yellow">
-                                        <span className="font-display font-black text-base leading-none">R{roomState.roundNumber || 1}</span>
-                                        <span className="text-[10px] font-bold text-jl-cream">HOLD</span>
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    RUM / HOLD
-                                </span>
-                            </div>
-
-                            {/* 1. Hider Question Inbox (Answer Photo/Manual questions) */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
-                                <button
-                                    onClick={() => setActiveTool(activeTool === 'hider_inbox' ? null : 'hider_inbox')}
-                                    className={`jl-hex-outer ${activeTool === 'hider_inbox' ? 'active-hex' : ''}`}
-                                    title="Se og besvar foto-spørgsmål fra Finderne"
-                                >
-                                    <div className="jl-hex-inner bg-jl-green text-white relative">
-                                        <span className="text-xl leading-none">📸</span>
-                                        <span className="text-[9px] font-black uppercase mt-0.5">INDBAKKE</span>
-                                        {pendingManualQuestions.length > 0 && (
-                                            <span className="absolute top-1 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
-                                                {pendingManualQuestions.length}
-                                            </span>
-                                        )}
-                                    </div>
-                                </button>
-                                <span className="mt-1 bg-jl-green text-white font-display font-black text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-white">
-                                    SVAR ({pendingManualQuestions.length})
-                                </span>
-                            </div>
-
-                            {/* 2. Lock 500m Hiding Zone Center */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
+                        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 z-[500] px-2 safe-bottom pointer-events-auto w-full max-w-md">
+                            <div className="jl-dock-bar rounded-3xl p-1.5 grid grid-cols-4 gap-1.5">
+                                {/* 1. Gemmer Indbakke (Svar på foto/manuelle spørgsmål + log) */}
                                 <button
                                     onClick={() => {
-                                        if (hiderLockedSpot) {
-                                            setHiderLockedSpot(null);
-                                            notify("500m Gemme-zone følger nu din GPS igen.");
-                                        } else {
-                                            setHiderLockedSpot({ lat: myCoords.lat, lng: myCoords.lng });
-                                            notify("🛡️ Dit 500m Gemmested er nu låst fast på kortet!");
-                                        }
+                                        JetLagAudio.playUiClick();
+                                        setActiveTool(activeTool === 'hider_inbox' ? null : 'hider_inbox');
                                     }}
-                                    className={`jl-hex-outer ${hiderLockedSpot ? 'active-hex' : ''}`}
-                                    title="Lås dit 500m gemmested på kortet"
+                                    className={`jl-dock-item ${activeTool === 'hider_inbox' ? 'active-tab-green' : 'text-jl-cream hover:bg-white/5'}`}
                                 >
-                                    <div className="jl-hex-inner bg-jl-navy text-jl-green">
-                                        <span className="text-xl leading-none">🛡️</span>
-                                        <span className="text-[9px] font-black uppercase mt-0.5">500M ZONE</span>
-                                    </div>
+                                    <span className="text-xl leading-none">📥</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        INDBAKKE
+                                    </span>
+                                    <span className="text-[9px] opacity-80 font-bold leading-none mt-0.5">
+                                        {pendingManualQuestions.length > 0 ? `${pendingManualQuestions.length} Afventer!` : `Log (${questionsLog.length})`}
+                                    </span>
+                                    {pendingManualQuestions.length > 0 && (
+                                        <span className="absolute top-1 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
+                                            {pendingManualQuestions.length}
+                                        </span>
+                                    )}
                                 </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    {hiderLockedSpot ? 'LÅST ZONE' : 'LÅS 500M'}
-                                </span>
-                            </div>
 
-                            {/* 3. Toggle Peek at Seekers' Red Zones */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
+                                {/* 2. Spørgsmål & Kort-Atlas (Se lufthavne, jernbaner, kommuner & alle 80 spørgsmål på kortet!) */}
                                 <button
                                     onClick={() => {
-                                        setHiderShowSeekerZones(!hiderShowSeekerZones);
-                                        notify(!hiderShowSeekerZones ? "Viser nu Findernes røde zoner på dit kort." : "Findernes røde zoner er skjult (Rent overvågningskort).");
+                                        JetLagAudio.playUiClick();
+                                        setActiveTool(activeTool === 'atlas' ? null : 'atlas');
                                     }}
-                                    className={`jl-hex-outer ${hiderShowSeekerZones ? 'active-hex' : ''}`}
-                                    title="Vis eller skjul hvad Finderne har udelukket på deres kort"
+                                    className={`jl-dock-item ${activeTool === 'atlas' || activeAtlasCategory ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
                                 >
-                                    <div className="jl-hex-inner bg-jl-dark text-jl-cream">
-                                        <span className="text-xl leading-none">👁️</span>
-                                        <span className="text-[9px] font-black uppercase mt-0.5">ZONER</span>
-                                    </div>
+                                    <span className="text-xl leading-none">🗺️</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        SPØRGSMÅL
+                                    </span>
+                                    <span className="text-[9px] opacity-80 font-bold leading-none mt-0.5">
+                                        {activeAtlasCategory ? 'Lag Aktivt' : 'Kort & Tog'}
+                                    </span>
                                 </button>
-                                <span className="mt-1 bg-jl-navy text-jl-cream font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-cream/30">
-                                    {hiderShowSeekerZones ? 'SKJUL RØD' : 'SE RØD'}
-                                </span>
-                            </div>
 
-                            {/* 4. Live Chat */}
-                            <div className="flex flex-col items-center jl-hex-shadow">
+                                {/* 3. Under-menu: Zoner & Taktik (Se Findernes røde zoner, Lås 500m zone, Hold) */}
                                 <button
                                     onClick={() => {
+                                        JetLagAudio.playUiClick();
+                                        const isSubOpen = ['hider_tactics', 'room'].includes(activeTool);
+                                        setActiveTool(isSubOpen ? null : 'hider_tactics');
+                                    }}
+                                    className={`jl-dock-item ${['hider_tactics', 'room'].includes(activeTool) ? 'active-tab-green' : 'text-jl-cream hover:bg-white/5'}`}
+                                >
+                                    <span className="text-xl leading-none">🛡️</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        ZONER & MERE
+                                    </span>
+                                    <span className="text-[9px] opacity-80 font-bold leading-none mt-0.5">
+                                        {hiderShowSeekerZones ? 'Rød: VISES' : `500m & Rød (${mapObjects.length})`}
+                                    </span>
+                                </button>
+
+                                {/* 4. Live Chat */}
+                                <button
+                                    onClick={() => {
+                                        JetLagAudio.playUiClick();
                                         setUnreadCount(0);
                                         setActiveTool(activeTool === 'chat' ? null : 'chat');
                                     }}
-                                    className={`jl-hex-outer ${activeTool === 'chat' ? 'active-hex' : ''}`}
+                                    className={`jl-dock-item ${activeTool === 'chat' ? 'active-tab' : 'text-jl-cream hover:bg-white/5'}`}
                                 >
-                                    <div className="jl-hex-inner bg-jl-yellow text-jl-navy relative">
-                                        <svg className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                        </svg>
-                                        {unreadCount > 0 && (
-                                            <span className="absolute top-1.5 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
-                                                {unreadCount}
-                                            </span>
-                                        )}
-                                    </div>
+                                    <span className="text-xl leading-none">💬</span>
+                                    <span className="font-display font-black text-xs sm:text-sm uppercase tracking-wider mt-1 leading-none">
+                                        CHAT
+                                    </span>
+                                    <span className="text-[9px] opacity-80 font-bold leading-none mt-0.5">
+                                        Live Comms
+                                    </span>
+                                    {unreadCount > 0 && (
+                                        <span className="absolute top-1 right-2 bg-jl-red text-white text-[10px] font-black px-1.5 rounded-full animate-bounce">
+                                            {unreadCount}
+                                        </span>
+                                    )}
                                 </button>
-                                <span className="mt-1 bg-jl-navy text-jl-yellow font-display font-extrabold text-[10px] sm:text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border border-jl-yellow/50">
-                                    CHAT
-                                </span>
                             </div>
                         </div>
                     )}
